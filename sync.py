@@ -14,6 +14,9 @@ creates the cards twice.
     python sync.py --next 5 --channel public
     python sync.py --dry-run --next 5
     python sync.py --latest 5 --channel public
+    python sync.py --log                (scheduled runs: output goes to the log file)
+
+Runs that write take a lock file, so two runs can't overlap and create duplicate cards.
 """
 
 import argparse
@@ -32,7 +35,12 @@ import requests
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
-STATE_PATH = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "darkswarm-bug-sync" / "state.json"
+DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "darkswarm-bug-sync"
+STATE_PATH = DATA_DIR / "state.json"
+LOCK_PATH = DATA_DIR / "sync.lock"
+LOG_PATH = DATA_DIR / "sync.log"
+LOCK_MAX_AGE = 2 * 60 * 60  # seconds; an older lock was left by a run that crashed or was killed
+LOG_MAX_BYTES = 1024 * 1024
 
 KEYRING_SERVICE = "darkswarm-bug-sync"
 KEYRING_DISCORD_TOKEN = "discord_bot_token"
@@ -376,6 +384,51 @@ def run_channel(discord, trello, config, state, channel, args):
         print(f"  Saved progress: after message {state.get(channel_id, 'none')}")
 
 
+def start_log(arguments):
+    """Send all output, errors and tracebacks included, to the log file."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if LOG_PATH.exists() and LOG_PATH.stat().st_size > LOG_MAX_BYTES:
+        os.replace(LOG_PATH, LOG_PATH.with_name("sync.log.old"))
+    log = open(LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
+    sys.stdout = sys.stderr = log
+    now = datetime.datetime.now(DANISH_TIME).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n===== {now} sync.py {' '.join(arguments)}")
+
+
+def lock_started(path):
+    return datetime.datetime.fromtimestamp(path.stat().st_mtime, DANISH_TIME).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def acquire_lock():
+    """Return True if this run now holds the lock, False if another run holds it."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            # Exclusive create fails if the file exists, so two runs can't both get it.
+            fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - LOCK_PATH.stat().st_mtime
+                started = lock_started(LOCK_PATH)
+            except FileNotFoundError:
+                continue  # the other run finished in between
+            if age < LOCK_MAX_AGE:
+                print(f"Another run is in progress (started {started}). Exiting.")
+                return False
+            print(f"Removing a stale lock from {started}, left by a run that didn't finish.")
+            LOCK_PATH.unlink(missing_ok=True)
+            continue
+        with os.fdopen(fd, "w") as f:
+            f.write(f"pid {os.getpid()}\n")
+        return True
+    print("Couldn't take the lock. Exiting.")
+    return False
+
+
+def release_lock():
+    LOCK_PATH.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--set-secrets", action="store_true", help="store the Discord and Trello secrets in Credential Manager")
@@ -385,10 +438,15 @@ def main():
                         help="process only the next N reports after the saved message ID")
     parser.add_argument("--latest", type=int, metavar="N",
                         help="test: create cards for the newest N reports only, with no reactions or saved state")
+    parser.add_argument("--log", action="store_true",
+                        help=f"write all output to {LOG_PATH} instead of the screen, for scheduled runs")
     args = parser.parse_args()
 
-    # Keep Danish letters and emoji from crashing the print when output is redirected.
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if args.log:
+        start_log(sys.argv[1:])
+    else:
+        # Keep Danish letters and emoji from crashing the print when output is redirected.
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     if args.set_secrets:
         set_secrets()
@@ -399,7 +457,19 @@ def main():
         if value is not None and value < 1:
             sys.exit(f"{flag} needs a number of 1 or more.")
 
-    secrets = {name: keyring.get_password(KEYRING_SERVICE, name) for name, _ in SECRETS}
+    # Only runs that write need the lock. Another run holding it isn't a failure, so exit 0.
+    locking = not args.dry_run
+    if locking and not acquire_lock():
+        return
+    try:
+        sync(args)
+    finally:
+        if locking:
+            release_lock()
+
+
+def sync(args):
+    secrets ={name: keyring.get_password(KEYRING_SERVICE, name) for name, _ in SECRETS}
     missing = [prompt for name, prompt in SECRETS if not secrets[name]]
     if missing:
         sys.exit(f"Not stored: {', '.join(missing)}. Run: python sync.py --set-secrets")

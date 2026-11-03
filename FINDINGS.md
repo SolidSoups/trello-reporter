@@ -116,14 +116,16 @@ For a report, the order is: create the card, upload the screenshot, add ⚙️, 
 
 The bot needs **Add Reactions** on the channel. Without it, the first report gets a card, the ⚙️ fails, and the run stops.
 
-## Still to build: moving to another PC and scheduling
+## Running on a schedule
 
-Already in place: the ⚙️ lives in Discord, so a PC with no `state.json` reads the history once, passes every ⚙️-marked report as already done, and continues. Secrets and state are per Windows user, so a scheduled task must run as the user who ran `--set-secrets`.
+The sync runs on the build computer, which is always on, every 15 minutes from Task Scheduler. `README.md` has the setup steps.
 
-Left to do:
-- `README.md` with setup for a new PC: Python 3.12, virtual environment, `--set-secrets`, `config.json`
-- a Task Scheduler entry, with output appended to a log file in `%LOCALAPPDATA%`
-- a lock file so a scheduled run and a manual run can't overlap and create duplicate cards
+- **Moving machines is safe** because the ⚙️ lives in Discord. A PC with no `state.json` reads the history once, passes every ⚙️-marked report as already done, and continues.
+- **Only one machine runs the sync.** The lock below works per machine.
+- **The task runs as the user who ran `--set-secrets`**, with the password stored. Secrets are in that user's Credential Manager, which "Do not store password" mode can't read.
+- **Lock:** every run that writes creates `sync.lock` in `%LOCALAPPDATA%\darkswarm-bug-sync\` with an exclusive create, and removes it when done. A run that finds a lock younger than 2 hours exits with code 0, since that isn't a failure. An older lock was left by a crash and is taken over. The task's 2-hour time limit matches that age.
+- **Log:** `--log` sends all output, including errors and tracebacks, to `sync.log` in the same folder. Each run starts with a `=====` line and the Danish time. Past 1 MB, the log is renamed to `sync.log.old`.
+- **Exit codes:** 0 when the run finished or the lock was taken by another run, 1 on any failure. Task Scheduler shows it as `LastTaskResult`.
 
 ### Blank reports
 The game's empty-text check doesn't catch whitespace. One real report (`1567118429696299008`) arrived as just `##`: the game sent `## ` plus spaces, and Discord trimmed them. The script strips `##` and any whitespace after it. A report with nothing left is skipped as "empty report text".
