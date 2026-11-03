@@ -84,6 +84,27 @@ Two things still depend on field names:
 ### Labels
 Never create an empty label, and never use a placeholder such as `[missing-description]`. If a value is missing or empty, that label is left off.
 
+- Labels come from Version, Mission and Map (`label_fields`), plus `External` or `Internal` for the channel.
+- A card with no usable screenshot gets the `No screenshot` label (`no_screenshot_label`). That covers a missing image, a failed download or zero bytes.
+- The script creates a missing label the first time it needs it, with no colour, and reuses an existing label with the same name. Colours are set by hand in Trello.
+- Keyword labels (Door, Stuck, Crash) and a "same session" flag were considered and left out for now.
+
+### Testing with `--latest N`
+`sync.py --latest N` creates cards for the newest N reports and nothing else. It adds no ✅ and never reads or writes the saved message ID, so testing against the real channel doesn't make the real run skip those reports. Running it twice creates duplicate cards.
+
+Tested 2026-11-03 against the test board with `--latest 5` on the public channel. The cards, labels and screenshots came through correctly. Trello accepts `"color": null` when creating a label, which gives a label with no colour.
+
+## Trello requests
+
+- The key and token go in the `Authorization: OAuth oauth_consumer_key="...", oauth_token="..."` header, never in the query string.
+- The app was created as "doesn't use Power-Up capabilities". It needs no iframe URL, OAuth or callback URL. The token comes from `https://trello.com/1/authorize?expiration=never&scope=read,write&response_type=token&key=<key>`.
+- Before writing, the script checks that the list in `config.json` belongs to the board.
+- Cards are created with `POST /1/cards` (form data, `idLabels` comma-separated, `pos=bottom`). The screenshot is uploaded with `POST /1/cards/{id}/attachments` as a multipart file named `screenshot.png`.
+
+## Still to build
+
+- The full run: process every report after the saved message ID, add ✅ to processed messages, and save the ID in `%LOCALAPPDATA%\darkswarm-bug-sync\state.json`. The bot needs the Add Reactions permission on the channel first.
+
 ### Blank reports
 The game's empty-text check doesn't catch whitespace. One real report (`1567118429696299008`) arrived as just `##`: the game sent `## ` plus spaces, and Discord trimmed them. The script strips `##` and any whitespace after it. A report with nothing left is skipped as "empty report text".
 

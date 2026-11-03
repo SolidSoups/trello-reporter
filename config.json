@@ -8,6 +8,11 @@
     "internal": "",
     "public": "1564292810046316667"
   },
-  "label_fields": ["Version", "Mission"],
+  "trello": {
+    "board_id": "6ae9c9b512e57aa5b9bee87f",
+    "list_id": "6ae9c9bdba0d72db5aed2ad2"
+  },
+  "label_fields": ["Version", "Mission", "Map"],
+  "no_screenshot_label": "No screenshot",
   "ignore_fields": ["Time", "Sentry"]
 }
