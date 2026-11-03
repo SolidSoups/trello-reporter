@@ -90,7 +90,7 @@ Never create an empty label, and never use a placeholder such as `[missing-descr
 - Keyword labels (Door, Stuck, Crash) and a "same session" flag were considered and left out for now.
 
 ### Testing with `--latest N`
-`sync.py --latest N` creates cards for the newest N reports and nothing else. It adds no ✅ and never reads or writes the saved message ID, so testing against the real channel doesn't make the real run skip those reports. Running it twice creates duplicate cards.
+`sync.py --latest N` creates cards for the newest N reports and nothing else. It adds no ⚙️ and never reads or writes the saved message ID, so testing against the real channel doesn't make the real run skip those reports. Running it twice creates duplicate cards.
 
 Tested 2026-11-03 against the test board with `--latest 5` on the public channel. The cards, labels and screenshots came through correctly. Trello accepts `"color": null` when creating a label, which gives a label with no colour.
 
@@ -101,9 +101,29 @@ Tested 2026-11-03 against the test board with `--latest 5` on the public channel
 - Before writing, the script checks that the list in `config.json` belongs to the board.
 - Cards are created with `POST /1/cards` (form data, `idLabels` comma-separated, `pos=bottom`). The screenshot is uploaded with `POST /1/cards/{id}/attachments` as a multipart file named `screenshot.png`.
 
-## Still to build
+## Running
 
-- The full run: process every report after the saved message ID, add ✅ to processed messages, and save the ID in `%LOCALAPPDATA%\darkswarm-bug-sync\state.json`. The bot needs the Add Reactions permission on the channel first.
+| Command | Does |
+|---|---|
+| `sync.py` | Every message after the saved ID |
+| `sync.py --next N` | The next N reports after the saved ID, so a backlog can be worked through in steps |
+| `sync.py --dry-run [--next N]` | Preview. Writes nothing |
+| `sync.py --latest N` | Test mode: newest N reports, no ⚙️, no saved ID |
+
+Messages are handled one at a time, oldest first. The saved ID lives in `%LOCALAPPDATA%\darkswarm-bug-sync\state.json`, one entry per channel, and moves after every message. That includes chatter and reports that already carry the bot's ⚙️. With no saved ID, the run starts from the beginning of the channel.
+
+For a report, the order is: create the card, upload the screenshot, add ⚙️, save the ID. A failure stops the run before the ID moves, so the next run retries that report. `--next N` counts only reports that got a ⚙️ (cards and skipped reports), not chatter or reports that were already done.
+
+The bot needs **Add Reactions** on the channel. Without it, the first report gets a card, the ⚙️ fails, and the run stops.
+
+## Still to build: moving to another PC and scheduling
+
+Already in place: the ⚙️ lives in Discord, so a PC with no `state.json` reads the history once, passes every ⚙️-marked report as already done, and continues. Secrets and state are per Windows user, so a scheduled task must run as the user who ran `--set-secrets`.
+
+Left to do:
+- `README.md` with setup for a new PC: Python 3.12, virtual environment, `--set-secrets`, `config.json`
+- a Task Scheduler entry, with output appended to a log file in `%LOCALAPPDATA%`
+- a lock file so a scheduled run and a manual run can't overlap and create duplicate cards
 
 ### Blank reports
 The game's empty-text check doesn't catch whitespace. One real report (`1567118429696299008`) arrived as just `##`: the game sent `## ` plus spaces, and Discord trimmed them. The script strips `##` and any whitespace after it. A report with nothing left is skipped as "empty report text".
@@ -116,16 +136,18 @@ Game-side follow-up: trim whitespace before the empty check.
 - The full report text always goes in the card description, whether or not the name was shortened.
 
 ### Marking messages as processed
-The ✅ reaction and the saved last-message ID both mean "processed", not "uploaded". A report is processed once the script has finished with it, either way:
+The marker is the gear reaction ⚙️ (`:gear:`). Teammates use ✅ in the channel themselves, so ✅ means nothing to the script. Only the bot's own ⚙️ counts. The gear is compared without its invisible variation selector, because Discord may return it either way.
 
-- **Card created:** the ✅ goes on after the card and its attachments exist, as before. A crash in between retries the report.
-- **Skipped** (fails the public channel check): it gets the ✅ too, and the skip is logged once. It is never looked at again.
+The ⚙️ reaction and the saved last-message ID both mean "processed", not "uploaded". A report is processed once the script has finished with it, either way:
+
+- **Card created:** the ⚙️ goes on after the card and its attachments exist, as before. A crash in between retries the report.
+- **Skipped** (fails the public channel check): it gets the ⚙️ too, and the skip is logged once. It is never looked at again.
 
 The saved ID in `%LOCALAPPDATA%` moves to each message as soon as that message is processed, so the next run starts after it.
 
-Only webhook messages are processed. Chatter from people in the channel gets no ✅ and is ignored. The saved ID moves past it.
+Only webhook messages are processed. Chatter from people in the channel gets no ⚙️ and is ignored. The saved ID moves past it.
 
-A ✅ on a skipped message means a person posting fake reports through the leaked webhook URL sees the same tick as a real reporter. That's accepted.
+A ⚙️ on a skipped message means a person posting fake reports through the leaked webhook URL sees the same reaction as a real reporter. That's accepted.
 
 ## Still open
 

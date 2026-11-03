@@ -1,13 +1,18 @@
 """Turn DarkSwarm bug reports posted to Discord into Trello cards.
 
---dry-run prints the cards it would create and writes nothing anywhere.
---latest N creates cards for the newest N reports only, as a test. It adds no
-reactions and doesn't touch the saved message ID, so running it twice creates
-the cards twice. A plain run without either flag isn't written yet.
+A plain run processes every message after the saved message ID, oldest first:
+it creates a card for each report, puts a gear reaction on it, and saves the ID.
+--next N stops after N reports. --dry-run prints what it would do and writes
+nothing anywhere.
+
+--latest N is a test mode: it creates cards for the newest N reports only, adds
+no reactions and doesn't touch the saved message ID, so running it twice
+creates the cards twice.
 
     python sync.py --set-secrets
-    python sync.py --dry-run
-    python sync.py --dry-run --latest 5 --channel public
+    python sync.py
+    python sync.py --next 5 --channel public
+    python sync.py --dry-run --next 5
     python sync.py --latest 5 --channel public
 """
 
@@ -46,7 +51,9 @@ MAX_RETRIES = 5
 TRELLO_RATE_WINDOW = 10  # Trello allows about 100 requests per 10 seconds per token
 
 DANISH_TIME = ZoneInfo("Europe/Copenhagen")
-CHECKMARK = "✅"
+# The bot marks processed reports with a gear. Teammates use checkmarks, so those mean nothing here.
+MARKER = "⚙️"
+MARKER_PATH = "%E2%9A%99%EF%B8%8F"
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 MAX_NAME_LENGTH = 100
 CHANNEL_LABELS = {"internal": "Internal", "public": "External"}
@@ -79,16 +86,36 @@ def load_state():
         return {}
 
 
-def discord_get(session, path, params=None):
-    """GET from the Discord API, sleeping and retrying on 429."""
+def save_state(state):
+    # Write a temporary file and swap it in, so a crash mid-write can't leave a broken file.
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = STATE_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    os.replace(temp_path, STATE_PATH)
+
+
+def discord_request(session, method, path, params=None):
+    """Send to the Discord API, sleeping and retrying on 429."""
     for _ in range(MAX_RETRIES):
-        response = session.get(DISCORD_API + path, params=params, timeout=TIMEOUT)
+        response = session.request(method, DISCORD_API + path, params=params, timeout=TIMEOUT)
         if response.status_code != 429:
             return response
         retry_after = float(response.json().get("retry_after", 1.0))
         print(f"  Rate limited. Sleeping {retry_after:.2f}s.")
         time.sleep(retry_after)
     return response
+
+
+def discord_get(session, path, params=None):
+    return discord_request(session, "GET", path, params)
+
+
+def add_marker(session, channel_id, message_id):
+    path = f"/channels/{channel_id}/messages/{message_id}/reactions/{MARKER_PATH}/@me"
+    response = discord_request(session, "PUT", path)
+    if response.status_code != 204:
+        raise RuntimeError(f"Couldn't add the {MARKER} reaction to message {message_id}: HTTP {response.status_code}:"
+                           f" {response.text[:300]}. Does the bot have Add Reactions on the channel?")
 
 
 def fetch_messages(session, channel_id, after_id):
@@ -213,8 +240,9 @@ def report_text(embed):
     return re.sub(r"^##\s*", "", text).strip()
 
 
-def has_own_checkmark(message):
-    return any(r.get("me") and r.get("emoji", {}).get("name") == CHECKMARK
+def has_own_marker(message):
+    # Discord may or may not keep the invisible variation selector after the gear, so compare without it.
+    return any(r.get("me") and (r.get("emoji", {}).get("name") or "").replace("️", "") == MARKER.replace("️", "")
                for r in message.get("reactions", []))
 
 
@@ -222,8 +250,8 @@ def classify(message, channel, webhook_id):
     """Return (group, reason). Group is 'ignored', 'done', 'skipped' or 'card'."""
     if not message.get("webhook_id") or message["webhook_id"] != webhook_id:
         return "ignored", "not from the report webhook"
-    if has_own_checkmark(message):
-        return "done", "already has the bot's checkmark"
+    if has_own_marker(message):
+        return "done", "already has the bot's reaction"
 
     embeds = message.get("embeds", [])
     if not embeds or not report_text(embeds[0]):
@@ -314,6 +342,8 @@ def run_channel(discord, trello, config, state, channel, args):
         print(f"\n##### Channel '{channel}' ({channel_id}), after message {after_id}")
         messages = fetch_messages(discord, channel_id, after_id)
 
+    # The test mode and the dry run never mark messages or move the saved ID.
+    tracking = not args.dry_run and not args.latest
     counts = {"card": 0, "skipped": 0, "done": 0, "ignored": 0}
     for message in messages:
         group, reason = classify(message, channel, webhook_id)
@@ -327,9 +357,23 @@ def run_channel(discord, trello, config, state, channel, args):
         elif group == "skipped":
             print(f"\n--- SKIPPED {message['id']}: {reason}")
 
+        # The gear goes on only after the card and its screenshot exist, and the
+        # ID moves only after that. A failure before this point retries the report next run.
+        reported = group in ("card", "skipped")
+        if tracking:
+            if reported:
+                add_marker(discord, channel_id, message["id"])
+            state[channel_id] = message["id"]
+            save_state(state)
+
+        if reported and args.next and counts["card"] + counts["skipped"] >= args.next:
+            break
+
     verb = "cards" if args.dry_run else "cards created"
     print(f"\n'{channel}': {counts['card']} {verb}, {counts['skipped']} skipped,"
           f" {counts['done']} already done, {counts['ignored']} ignored")
+    if tracking:
+        print(f"  Saved progress: after message {state.get(channel_id, 'none')}")
 
 
 def main():
@@ -337,6 +381,8 @@ def main():
     parser.add_argument("--set-secrets", action="store_true", help="store the Discord and Trello secrets in Credential Manager")
     parser.add_argument("--dry-run", action="store_true", help="print the cards it would create, write nothing")
     parser.add_argument("--channel", choices=["internal", "public"], help="process only this channel")
+    parser.add_argument("--next", type=int, metavar="N",
+                        help="process only the next N reports after the saved message ID")
     parser.add_argument("--latest", type=int, metavar="N",
                         help="test: create cards for the newest N reports only, with no reactions or saved state")
     args = parser.parse_args()
@@ -347,10 +393,11 @@ def main():
     if args.set_secrets:
         set_secrets()
         return
-    if not args.dry_run and not args.latest:
-        sys.exit("The full sync isn't written yet. Run with --dry-run or --latest N.")
-    if args.latest is not None and args.latest < 1:
-        sys.exit("--latest needs a number of 1 or more.")
+    if args.next is not None and args.latest is not None:
+        sys.exit("Use --next or --latest, not both.")
+    for flag, value in (("--next", args.next), ("--latest", args.latest)):
+        if value is not None and value < 1:
+            sys.exit(f"{flag} needs a number of 1 or more.")
 
     secrets = {name: keyring.get_password(KEYRING_SERVICE, name) for name, _ in SECRETS}
     missing = [prompt for name, prompt in SECRETS if not secrets[name]]
