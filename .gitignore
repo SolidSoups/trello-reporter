@@ -1,0 +1,6 @@
+# Local Python environment
+.venv/
+__pycache__/
+
+# Raw Discord messages and screenshots: player names and signed URLs
+samples/
