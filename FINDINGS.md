@@ -189,7 +189,11 @@ Every report gets one or two discipline labels, each with its own colour:
    - Cards in DONE are also marked complete.
    - A card that already has a discipline label is left alone, so the step can be run again safely.
 2. **Moving is done by hand.** The team moves the cards out of the old discipline lists when it's ready. The script doesn't move cards.
-3. **Later:** Claude moves new reports from Incoming into the theme lists. Not built yet.
+3. **Sorting into themes** has two parts:
+   - **Re-sort (built, `sort.py --sort`):** run by hand now and then. It goes through Incoming and moves each labelled card into a theme list that fits. If none fits, the card stays, since the team may create a fitting list later. Uncategorized, Unactionable and completed cards stay in Incoming for a person. There are no General lists: the discipline labels already let each team find the cards left in Incoming.
+   - **Only lists whose name starts with `##` get automatic sorting**, for example `## Soft locking`. A list without it, such as `UI issues`, is left alone. The team turns sorting on or off per list by renaming it.
+   - **Intake (not built yet):** runs after each sync. It labels new reports and moves them into a fitting theme list straight away.
+   - No comments on moved cards. Reasons go in the run report and `moves.jsonl`.
 
 ### Choosing a model
 `sort.py --evaluate` tested Claude against the 213 cards the team had sorted by hand (2026-11-04):

@@ -114,6 +114,24 @@ Where labels come from with `--label`:
 
 The labels are created with their colours the first time `--apply` runs. Every change is logged in `label_changes.jsonl`. To undo everything, delete the discipline labels on the board in Trello (board menu, Labels): that removes them from every card.
 
+## Sorting Incoming into theme lists
+
+`sort.py --sort` moves labelled cards from Incoming into the theme list that fits them. Run it after creating new theme lists, or when Incoming has piled up.
+
+| Command | Does |
+|---|---|
+| `.\.venv\Scripts\python.exe sort.py --sort --limit 20` | Preview for the 20 oldest cards in Incoming. Moves nothing |
+| `.\.venv\Scripts\python.exe sort.py --sort` | Preview for every card in Incoming |
+| `.\.venv\Scripts\python.exe sort.py --sort --apply` | Moves the cards. Takes a snapshot first |
+| `.\.venv\Scripts\python.exe sort.py --undo-moves --since "2026-11-04 14:30"` | Moves the bot's cards back to Incoming. Without `--since`, every logged move. Shows the count per list and only goes ahead when you type `yes` |
+
+- **Only cards in Incoming are moved.** DONE is never touched.
+- **Automatic sorting is on for a list when its name starts with `##`.** `## Soft locking` gets cards sorted into it; `UI issues` doesn't. Rename a list to turn it on or off. Claude sees the name without the `##`. Incoming, DONE and Unactionable never take part, whatever their names.
+- **Cards that stay in Incoming:** no theme fits, Uncategorized or Unactionable, marked complete, or no discipline label yet.
+- **How Claude knows the themes:** the list names, plus up to 3 cards already in each list as examples. The more the team sorts by hand, the better the bot gets. If a name is ambiguous, write a line about it in `themes.md` in the repo folder (for example "Soft locking: the mission can't continue. Not for doors."). The file is optional.
+- **Cost:** turning a list on or off, renaming it or filling it changes what Claude is told, so every card is asked again on the next run. That's about $0.15 for 450 cards with Haiku. A rerun with no changes is free.
+- **Undo** only moves a card back if it's still in the list the bot put it in. Every move and undo is logged in `moves.jsonl`.
+
 `--model` is `haiku`, `sonnet` or `opus`. Without it, the model in `config.json` under `sorting` is used (Haiku). `--limit` with `--evaluate` picks the same cards every run, so models can be compared on the same set.
 
 Each run prints a summary and writes a report to `%LOCALAPPDATA%\darkswarm-bug-sync\`, with the cost of the run at the top. Answers are saved in `sort_answers.json` there, so asking the same model about the same card again costs nothing until `disciplines.md` changes. A preview followed by `--apply` only pays once. Shrunk screenshots are kept in `screenshots\`.
