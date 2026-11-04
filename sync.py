@@ -420,13 +420,13 @@ def organize_stragglers(trello, organizer):
     """Label and place cards in Incoming that have no discipline label yet: reports from runs where
     Claude couldn't be reached. Cheap when there are none: it only reads Incoming's labels."""
     board = organizer.board
-    incoming = trello.request("GET", f"/lists/{trello.list_id}/cards", params={"fields": "labels,dueComplete"})
-    if not any(not board.has_board_label(card) and not card.get("dueComplete") for card in incoming):
+    # Completed cards count too, so fixed reports also end up labelled in their theme list.
+    incoming = trello.request("GET", f"/lists/{trello.list_id}/cards", params={"fields": "labels"})
+    if all(board.has_board_label(card) for card in incoming):
         return
     cards = board.board_cards()
     organizer.prepare(cards)
-    stragglers = [card for card in cards if card["idList"] == trello.list_id
-                  and not board.has_board_label(card) and not card.get("dueComplete")]
+    stragglers = [card for card in cards if card["idList"] == trello.list_id and not board.has_board_label(card)]
     print(f"\nLabelling {len(stragglers)} cards in Incoming that have no discipline label yet.")
     decisions = organizer.decide([board.card_item(card) for card in stragglers])
     for card in stragglers:

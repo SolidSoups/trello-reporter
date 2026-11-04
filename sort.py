@@ -6,8 +6,8 @@ handles what's already on the board:
 --sort moves labelled cards in Incoming into the theme list that fits them.
 Only lists whose name starts with "##" take part ("## Soft locking"); rename a
 list to turn automatic sorting on or off. Cards with no fitting theme,
-Uncategorized or Unactionable cards, completed cards and cards without a
-discipline label stay in Incoming. It runs 5 minutes after each sync on the build computer, so
+Uncategorized or Unactionable cards and cards without a discipline label stay
+in Incoming. Completed cards are sorted like any other, keeping their tick. It runs 5 minutes after each sync on the build computer, so
 cards waiting in Incoming find new theme lists the team creates.
 
 --label gives every open card on the board without one its discipline labels,
@@ -254,13 +254,12 @@ def sort_incoming(board, config, limit, apply):
     prompt = board.theme_prompt({name: [card for card in cards if card["idList"] == list_id]
                                  for name, list_id in themes.items()})
 
+    # Completed cards are sorted too, so each theme list shows its fixed reports next to the open ones.
     special = {board.uncategorized, board.unactionable}
     candidates, skipped = [], collections.Counter()
     for card in sorted((card for card in cards if card["idList"] == board.incoming_id), key=lambda c: c["id"]):
         names = {label["name"] for label in card["labels"]}
-        if card.get("dueComplete"):
-            skipped["marked complete"] += 1
-        elif names & special:
+        if names & special:
             skipped["Uncategorized or Unactionable"] += 1
         elif not names & set(board.disciplines):
             skipped["no discipline label yet"] += 1
