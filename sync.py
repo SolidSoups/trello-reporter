@@ -46,11 +46,14 @@ KEYRING_SERVICE = "darkswarm-bug-sync"
 KEYRING_DISCORD_TOKEN = "discord_bot_token"
 KEYRING_TRELLO_KEY = "trello_api_key"
 KEYRING_TRELLO_TOKEN = "trello_token"
-SECRETS = [
+KEYRING_ANTHROPIC_KEY = "anthropic_api_key"
+SYNC_SECRETS = [
     (KEYRING_DISCORD_TOKEN, "Discord bot token"),
     (KEYRING_TRELLO_KEY, "Trello API key"),
     (KEYRING_TRELLO_TOKEN, "Trello token"),
 ]
+# The sorting bot reads the Anthropic key from the same place. The sync itself doesn't need it.
+SECRETS = SYNC_SECRETS + [(KEYRING_ANTHROPIC_KEY, "Anthropic API key, for sorting")]
 
 DISCORD_API = "https://discord.com/api/v10"
 TRELLO_API = "https://api.trello.com/1"
@@ -431,7 +434,7 @@ def release_lock():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--set-secrets", action="store_true", help="store the Discord and Trello secrets in Credential Manager")
+    parser.add_argument("--set-secrets", action="store_true", help="store the Discord, Trello and Anthropic secrets in Credential Manager")
     parser.add_argument("--dry-run", action="store_true", help="print the cards it would create, write nothing")
     parser.add_argument("--channel", choices=["internal", "public"], help="process only this channel")
     parser.add_argument("--next", type=int, metavar="N",
@@ -469,8 +472,8 @@ def main():
 
 
 def sync(args):
-    secrets ={name: keyring.get_password(KEYRING_SERVICE, name) for name, _ in SECRETS}
-    missing = [prompt for name, prompt in SECRETS if not secrets[name]]
+    secrets = {name: keyring.get_password(KEYRING_SERVICE, name) for name, _ in SYNC_SECRETS}
+    missing = [prompt for name, prompt in SYNC_SECRETS if not secrets[name]]
     if missing:
         sys.exit(f"Not stored: {', '.join(missing)}. Run: python sync.py --set-secrets")
 

@@ -21,7 +21,7 @@ On the build computer it runs by itself every 15 minutes. These four files in th
    git clone https://github.com/SolidSoups/trello-reporter.git
    ```
 
-3. Double-click **`setup.cmd`** in the new `trello-reporter` folder. When it asks, paste the Discord bot token, the Trello API key and the Trello token, pressing Enter after each one. Nothing shows on screen when you paste; that's on purpose, and it works over Remote Desktop.
+3. Double-click **`setup.cmd`** in the new `trello-reporter` folder. When it asks, paste the Discord bot token, the Trello API key, the Trello token and the Anthropic API key, pressing Enter after each one. The sync doesn't need the Anthropic key; press Enter to skip it if you don't have it yet. Nothing shows on screen when you paste; that's on purpose, and it works over Remote Desktop.
 
    It ends with a preview of the next 3 reports, which writes nothing. On a new PC, reports that already have the bot's ⚙️ count as "already done", so the preview only shows reports that haven't been processed yet.
 
