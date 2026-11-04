@@ -1,6 +1,6 @@
 # Starts the three scheduled jobs and runs the sync once right away:
 #   DarkSwarm Bug Sync      every 15 minutes  sync.py --log         new reports become labelled, sorted cards
-#   DarkSwarm Bug Sort      every hour        sort.py --sort --apply --log   cards in Incoming find new ## lists
+#   DarkSwarm Bug Sort      every 15 minutes, 5 minutes after the sync   sort.py --sort --apply --log   cards in Incoming find new ## lists
 #   DarkSwarm Board Backup  every night 03:00 backup.py --log       snapshot of the board (screenshots stay in Discord)
 # Running it again replaces the existing schedule.
 
@@ -18,9 +18,10 @@ $jobs = @(
     @{ Name = 'DarkSwarm Bug Sync'; Arguments = 'sync.py --log'
        Trigger = New-ScheduledTaskTrigger -Once -At $now -RepetitionInterval (New-TimeSpan -Minutes 15)
        Limit = New-TimeSpan -Hours 2 },
-    # Starts 7 minutes after the sync, so the two rarely want the board at the same time.
+    # Runs 5 minutes after each sync, so the two rarely want the board at the same time.
+    # When they do, the shared lock makes one skip its turn.
     @{ Name = 'DarkSwarm Bug Sort'; Arguments = 'sort.py --sort --apply --log'
-       Trigger = New-ScheduledTaskTrigger -Once -At $now.AddMinutes(7) -RepetitionInterval (New-TimeSpan -Hours 1)
+       Trigger = New-ScheduledTaskTrigger -Once -At $now.AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 15)
        Limit = New-TimeSpan -Hours 1 },
     @{ Name = 'DarkSwarm Board Backup'; Arguments = 'backup.py --log'
        Trigger = New-ScheduledTaskTrigger -Daily -At '03:00'
@@ -54,5 +55,5 @@ foreach ($job in $jobs) {
 
 Start-ScheduledTask -TaskName 'DarkSwarm Bug Sync'
 Write-Host ''
-Write-Host 'The sync runs every 15 minutes, the sort every hour and the backup every night at 03:00.'
+Write-Host 'The sync runs every 15 minutes, the sort 5 minutes after each sync, and the backup every night at 03:00.'
 Write-Host 'The first sync has started. Run status.cmd in a minute to see the result. Run stop-schedule.cmd to stop everything.'

@@ -7,7 +7,7 @@ handles what's already on the board:
 Only lists whose name starts with "##" take part ("## Soft locking"); rename a
 list to turn automatic sorting on or off. Cards with no fitting theme,
 Uncategorized or Unactionable cards, completed cards and cards without a
-discipline label stay in Incoming. It runs every hour on the build computer, so
+discipline label stay in Incoming. It runs 5 minutes after each sync on the build computer, so
 cards waiting in Incoming find new theme lists the team creates.
 
 --label gives every open card on the board without one its discipline labels,
@@ -26,7 +26,7 @@ Without --apply, --sort and --label only write a preview report.
 
     python sort.py --sort --limit 20             (preview)
     python sort.py --sort --apply                (moves cards)
-    python sort.py --sort --apply --log          (the hourly scheduled run)
+    python sort.py --sort --apply --log          (the scheduled run)
     python sort.py --label --apply
     python sort.py --evaluate --model haiku --limit 30
     python sort.py --undo-moves --since "2026-11-04 14:30"

@@ -7,7 +7,7 @@ On the build computer, three jobs run by themselves:
 | Job | When | Does |
 |---|---|---|
 | Sync (`sync.py`) | Every 15 minutes | New reports become labelled cards, in a `##` list or Incoming |
-| Sort (`sort.py --sort --apply`) | Every hour | Cards waiting in Incoming move into `##` lists that fit them, including lists created since |
+| Sort (`sort.py --sort --apply`) | Every 15 minutes, 5 minutes after the sync | Cards waiting in Incoming move into `##` lists that fit them, including lists created since |
 | Backup (`backup.py`) | Every night at 03:00 | A snapshot of the board. Screenshots stay in Discord |
 
 These four files in the repo folder control them. Double-click them:
@@ -25,7 +25,7 @@ These four files in the repo folder control them. Double-click them:
 - **A list sorts automatically when its name starts with `##`.** To add a theme without the bot filling it too early:
   1. Create the list **without** `##`, for example `Aiming issues`.
   2. Drag in 2 or 3 typical reports. Claude learns the theme from these.
-  3. Rename it to `## Aiming issues`. Within the hour, matching cards from Incoming move in, and new reports go there directly.
+  3. Rename it to `## Aiming issues`. Within 15 minutes, matching cards from Incoming move in, and new reports go there directly. So add the `##` last: the bot starts filling the list almost straight away.
 - **Fixed?** Tick the card complete and leave it in its list.
 - **Archive, never delete.** Archived cards and lists can be brought back; deleted ones can't.
 - **Don't rename** the nine discipline labels, Incoming, DONE or Unactionable. The scripts find them by name or ID.
@@ -142,7 +142,7 @@ The labels are created with their colours the first time `--apply` runs. Every c
 
 ## Sorting Incoming into theme lists
 
-`sort.py --sort` moves labelled cards from Incoming into the theme list that fits them. On the build computer it runs every hour by itself; run it by hand when you don't want to wait. New reports don't need it: the sync places them as they arrive.
+`sort.py --sort` moves labelled cards from Incoming into the theme list that fits them. On the build computer it runs by itself 5 minutes after each sync; run it by hand when you don't want to wait. New reports don't need it: the sync places them as they arrive.
 
 | Command | Does |
 |---|---|
