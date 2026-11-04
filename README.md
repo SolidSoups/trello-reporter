@@ -18,6 +18,13 @@ These four files in the repo folder control them. Double-click them:
 | `start-schedule.cmd` | Starts all three jobs, and runs the sync once right away |
 | `stop-schedule.cmd` | Stops all three. A run that's busy is allowed to finish first |
 | `status.cmd` | Shows each job's last run and the end of its log, plus a warning if new reports arrived unlabelled |
+| `run-sync.cmd` | Runs the sync now, with its output on screen |
+| `run-sort.cmd` | Runs the sort now: moves waiting cards from Incoming into `##` lists |
+| `run-backup.cmd` | Takes a board snapshot now |
+
+The `run-` files use the same lock and data folder as the scheduled jobs, so they're safe to run at any time; if a scheduled run is busy, they say so and exit. Run them on the build computer only.
+
+Undoing the bot's moves (`sort.py --undo-moves`) is deliberately not a double-click file. It's typed in PowerShell and asks for `yes` before it moves anything.
 
 ## For the team: working with the board
 
