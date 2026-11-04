@@ -192,7 +192,10 @@ Every report gets one or two discipline labels, each with its own colour:
 3. **Sorting into themes** has two parts:
    - **Re-sort (built, `sort.py --sort`):** run by hand now and then. It goes through Incoming and moves each labelled card into a theme list that fits. If none fits, the card stays, since the team may create a fitting list later. Uncategorized, Unactionable and completed cards stay in Incoming for a person. There are no General lists: the discipline labels already let each team find the cards left in Incoming.
    - **Only lists whose name starts with `##` get automatic sorting**, for example `## Soft locking`. A list without it, such as `UI issues`, is left alone. The team turns sorting on or off per list by renaming it.
-   - **Intake (not built yet):** runs after each sync. It labels new reports and moves them into a fitting theme list straight away.
+   - **The sync labels and places new reports (built 2026-11-04).** For each batch of up to 20 new reports, Claude is asked for the labels and a `##` list, 4 reports at a time, and then the cards are created in order, straight into their list or Incoming. Progress is still saved per report. A flood of 200 reports takes about 5 minutes. If Claude can't be reached or no key is stored, cards arrive unlabelled in Incoming, and the next run labels and places them.
+   - **The sort runs every hour** on the build computer, so cards in Incoming find lists the team creates later. A run where nothing changed asks Claude nothing and costs nothing. It takes a snapshot only when it's about to move cards.
+   - **The sync and the sort share one lock,** so they never write to the board at the same time.
+   - **A backup runs every night at 03:00.**
    - No comments on moved cards. Reasons go in the run report and `moves.jsonl`.
 
 ### Choosing a model

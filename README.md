@@ -1,15 +1,35 @@
 # DarkSwarm bug report sync
 
-Reads the bug reports the game posts to Discord and creates a Trello card for each one, with its screenshot. Each processed report gets a ⚙️ reaction from the bot. The script also saves how far it got, so the next run starts where the last one stopped.
+Reads the bug reports the game posts to Discord and creates a Trello card for each one, with its screenshot. Claude gives each new card its discipline labels and puts it in a matching `##` theme list, or in Incoming when none fits. Each processed report gets a ⚙️ reaction from the bot. The script also saves how far it got, so the next run starts where the last one stopped.
 
-On the build computer it runs by itself every 15 minutes. These four files in the repo folder control it. Double-click them:
+On the build computer, three jobs run by themselves:
+
+| Job | When | Does |
+|---|---|---|
+| Sync (`sync.py`) | Every 15 minutes | New reports become labelled cards, in a `##` list or Incoming |
+| Sort (`sort.py --sort --apply`) | Every hour | Cards waiting in Incoming move into `##` lists that fit them, including lists created since |
+| Backup (`backup.py`) | Every night at 03:00 | A snapshot of the board, plus any new screenshots |
+
+These four files in the repo folder control them. Double-click them:
 
 | File | Does |
 |---|---|
 | `setup.cmd` | Prepares the PC, once: Python environment, packages, secrets, and a check that writes nothing |
-| `start-schedule.cmd` | Starts the sync every 15 minutes, and runs it once right away |
-| `stop-schedule.cmd` | Stops the sync. A run that's busy is allowed to finish first |
-| `status.cmd` | Shows whether the sync is running, how the last run went, and the end of the log |
+| `start-schedule.cmd` | Starts all three jobs, and runs the sync once right away |
+| `stop-schedule.cmd` | Stops all three. A run that's busy is allowed to finish first |
+| `status.cmd` | Shows each job's last run and the end of its log, plus a warning if new reports arrived unlabelled |
+
+## For the team: working with the board
+
+- **New reports** arrive labelled, in a `##` list or in Incoming. Filter by your discipline label to find yours.
+- **A list sorts automatically when its name starts with `##`.** To add a theme without the bot filling it too early:
+  1. Create the list **without** `##`, for example `Aiming issues`.
+  2. Drag in 2 or 3 typical reports. Claude learns the theme from these.
+  3. Rename it to `## Aiming issues`. Within the hour, matching cards from Incoming move in, and new reports go there directly.
+- **Fixed?** Tick the card complete and leave it in its list.
+- **Archive, never delete.** Archived cards and lists can be brought back; deleted ones can't.
+- **Don't rename** the nine discipline labels, Incoming, DONE or Unactionable. The scripts find them by name or ID.
+- **A wrong label or list?** Just fix it by hand. The bot never touches a card again once it's out of Incoming, and your fixes become examples it learns from.
 
 ## Setting up a PC
 
@@ -21,7 +41,7 @@ On the build computer it runs by itself every 15 minutes. These four files in th
    git clone https://github.com/SolidSoups/trello-reporter.git
    ```
 
-3. Double-click **`setup.cmd`** in the new `trello-reporter` folder. When it asks, paste the Discord bot token, the Trello API key, the Trello token and the Anthropic API key, pressing Enter after each one. The sync doesn't need the Anthropic key; press Enter to skip it if you don't have it yet. Nothing shows on screen when you paste; that's on purpose, and it works over Remote Desktop.
+3. Double-click **`setup.cmd`** in the new `trello-reporter` folder. When it asks, paste the Discord bot token, the Trello API key, the Trello token and the Anthropic API key, pressing Enter after each one. Without the Anthropic key, reports still arrive, but unlabelled and in Incoming. Nothing shows on screen when you paste; that's on purpose, and it works over Remote Desktop.
 
    It ends with a preview of the next 3 reports, which writes nothing. On a new PC, reports that already have the bot's ⚙️ count as "already done", so the preview only shows reports that haven't been processed yet.
 
@@ -31,9 +51,9 @@ On the build computer it runs by itself every 15 minutes. These four files in th
 
 That's all. The sync keeps running after you disconnect from Remote Desktop and after the PC restarts.
 
-## Only one machine runs the sync
+## Only one machine runs the jobs
 
-Before setting up a new PC, run `stop-schedule.cmd` on the old one and stop running the sync there by hand. Two PCs running at once can create duplicate cards.
+Before setting up a new PC, run `stop-schedule.cmd` on the old one and stop running the scripts there by hand. Two PCs running at once can create duplicate cards. Commands that write to the board (`--apply`, `--undo-moves`) also belong on the build computer: the logs that say what the bot did, and that undo and the examples depend on, live on the PC that ran them.
 
 ## If something goes wrong
 
@@ -41,7 +61,8 @@ Before setting up a new PC, run `stop-schedule.cmd` on the old one and stop runn
 - **`start-schedule.cmd` says access is denied:** right-click it and choose **Run as administrator**. On a domain machine, your account may also need the "Log on as a batch job" right.
 - **`status.cmd` says FAILED:** the log below it says why. The next run tries again from the same report.
 - **You changed your Windows password:** run `start-schedule.cmd` again, or every run fails.
-- **"Another run is in progress" in the log:** a run found another one still busy and exited without doing anything. That's normal. A lock older than 2 hours is treated as left over from a crash and removed.
+- **"Another run is in progress" in the log:** a run found another one still busy and exited without doing anything. The sync and the sort share one lock, so this also happens when they meet. That's normal. A lock older than 2 hours is treated as left over from a crash and removed.
+- **`status.cmd` warns that reports arrived without discipline labels:** Claude couldn't be reached, or no Anthropic key is stored. The sync labels those cards by itself on a later run once Claude works again. If the key is missing, run `setup.cmd` again.
 
 ## Updating
 
@@ -60,8 +81,11 @@ All in `%LOCALAPPDATA%\darkswarm-bug-sync\`:
 | File | What it is |
 |---|---|
 | `state.json` | Saved progress: the last processed message per channel. Deleting it is safe; the next run reads the channel from the start and skips ⚙️ reports. |
-| `sync.log` | Output of the scheduled runs. Past 1 MB it's renamed to `sync.log.old`. |
-| `sync.lock` | Exists only while a run is busy |
+| `sync.log`, `sort.log`, `backup.log` | Output of the scheduled runs. Past 1 MB each is renamed to `.log.old`. |
+| `sync.lock` | Exists only while a sync or a writing sort run is busy |
+| `label_changes.jsonl`, `moves.jsonl` | Every label and move the bot made. Undo and "which labels a person chose" depend on them |
+| `sort_answers.json`, `screenshots\` | Claude's cached answers and shrunk screenshots |
+| `snapshots\` | Board backups |
 
 The secrets are in Windows Credential Manager under `darkswarm-bug-sync`, for the Windows user who ran `setup.cmd`. The schedule runs as that same user.
 
@@ -117,7 +141,7 @@ The labels are created with their colours the first time `--apply` runs. Every c
 
 ## Sorting Incoming into theme lists
 
-`sort.py --sort` moves labelled cards from Incoming into the theme list that fits them. Run it after creating new theme lists, or when Incoming has piled up.
+`sort.py --sort` moves labelled cards from Incoming into the theme list that fits them. On the build computer it runs every hour by itself; run it by hand when you don't want to wait. New reports don't need it: the sync places them as they arrive.
 
 | Command | Does |
 |---|---|

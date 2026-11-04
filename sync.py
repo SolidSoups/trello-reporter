@@ -1,9 +1,17 @@
-"""Turn DarkSwarm bug reports posted to Discord into Trello cards.
+"""Turn DarkSwarm bug reports posted to Discord into Trello cards, labelled and sorted.
 
-A plain run processes every message after the saved message ID, oldest first:
-it creates a card for each report, puts a gear reaction on it, and saves the ID.
---next N stops after N reports. --dry-run prints what it would do and writes
-nothing anywhere.
+A plain run processes every message after the saved message ID, oldest first.
+For each report it asks Claude for the discipline labels and a matching "##"
+theme list, creates the card there (or in Incoming) with its screenshot, puts a
+gear reaction on the message, and saves the ID. Reports are handled in batches:
+Claude is asked about a whole batch at once, then the cards are created in order.
+
+If Claude can't be reached, or no Anthropic key is stored, cards are still
+created, just without discipline labels. Each run first labels and places any
+such cards left in Incoming.
+
+--next N stops after N reports. --dry-run prints what it would do, including
+Claude's labels and list, and writes nothing to Trello or Discord.
 
 --latest N is a test mode: it creates cards for the newest N reports only, adds
 no reactions and doesn't touch the saved message ID, so running it twice
@@ -16,76 +24,38 @@ creates the cards twice.
     python sync.py --latest 5 --channel public
     python sync.py --log                (scheduled runs: output goes to the log file)
 
-Runs that write take a lock file, so two runs can't overlap and create duplicate cards.
+Runs that write take a lock file, shared with sort.py, so two runs can't
+overlap and create duplicate cards.
 """
 
 import argparse
 import datetime
-import getpass
 import json
 import os
 import re
 import sys
 import time
-from pathlib import Path
-from zoneinfo import ZoneInfo
 
-import keyring
+import anthropic
 import requests
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = SCRIPT_DIR / "config.json"
-DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "darkswarm-bug-sync"
+from claude_board import Board, card_link, ensure_labels, log_labels, log_move, make_board
+from common import (
+    DANISH_TIME, DATA_DIR, KEYRING_ANTHROPIC_KEY, KEYRING_DISCORD_TOKEN, KEYRING_TRELLO_KEY,
+    KEYRING_TRELLO_TOKEN, MAX_RETRIES, TIMEOUT, Trello, acquire_lock, get_secret, load_config,
+    release_lock, set_secrets, start_log,
+)
+
 STATE_PATH = DATA_DIR / "state.json"
-LOCK_PATH = DATA_DIR / "sync.lock"
-LOG_PATH = DATA_DIR / "sync.log"
-LOCK_MAX_AGE = 2 * 60 * 60  # seconds; an older lock was left by a run that crashed or was killed
-LOG_MAX_BYTES = 1024 * 1024
-
-KEYRING_SERVICE = "darkswarm-bug-sync"
-KEYRING_DISCORD_TOKEN = "discord_bot_token"
-KEYRING_TRELLO_KEY = "trello_api_key"
-KEYRING_TRELLO_TOKEN = "trello_token"
-KEYRING_ANTHROPIC_KEY = "anthropic_api_key"
-SYNC_SECRETS = [
-    (KEYRING_DISCORD_TOKEN, "Discord bot token"),
-    (KEYRING_TRELLO_KEY, "Trello API key"),
-    (KEYRING_TRELLO_TOKEN, "Trello token"),
-]
-# The sorting bot reads the Anthropic key from the same place. The sync itself doesn't need it.
-SECRETS = SYNC_SECRETS + [(KEYRING_ANTHROPIC_KEY, "Anthropic API key, for sorting")]
-
 DISCORD_API = "https://discord.com/api/v10"
-TRELLO_API = "https://api.trello.com/1"
-TIMEOUT = 30
-MAX_RETRIES = 5
-TRELLO_RATE_WINDOW = 10  # Trello allows about 100 requests per 10 seconds per token
+BATCH_SIZE = 20  # reports Claude is asked about at once; progress is saved after each batch's cards
 
-DANISH_TIME = ZoneInfo("Europe/Copenhagen")
 # The bot marks processed reports with a gear. Teammates use checkmarks, so those mean nothing here.
 MARKER = "⚙️"
 MARKER_PATH = "%E2%9A%99%EF%B8%8F"
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 MAX_NAME_LENGTH = 100
 CHANNEL_LABELS = {"internal": "Internal", "public": "External"}
-
-
-def set_secrets():
-    print("Input is hidden. Press Enter on an empty line to keep the stored value.")
-    for name, prompt in SECRETS:
-        stored = keyring.get_password(KEYRING_SERVICE, name)
-        value = getpass.getpass(f"{prompt} ({'stored' if stored else 'not set'}): ").strip()
-        if value:
-            keyring.set_password(KEYRING_SERVICE, name, value)
-            print("  Stored.")
-        else:
-            print("  Kept." if stored else "  Still not set.")
-    print(f"Secrets live in Windows Credential Manager under '{KEYRING_SERVICE}'.")
-
-
-def load_config():
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)
 
 
 def load_state():
@@ -165,46 +135,6 @@ def fetch_latest_reports(session, channel_id, channel, webhook_id, count):
     return sorted(reports, key=lambda m: int(m["id"]))
 
 
-class Trello:
-    def __init__(self, key, token, config):
-        self.session = requests.Session()
-        # The header keeps the key and token out of URLs and error messages.
-        self.session.headers["Authorization"] = f'OAuth oauth_consumer_key="{key}", oauth_token="{token}"'
-        self.board_id = config["trello"]["board_id"]
-        self.list_id = config["trello"]["list_id"]
-        self.labels = {}
-
-    def request(self, method, path, **kwargs):
-        for _ in range(MAX_RETRIES):
-            response = self.session.request(method, TRELLO_API + path, timeout=TIMEOUT, **kwargs)
-            if response.status_code != 429:
-                break
-            print(f"  Trello rate limit. Sleeping {TRELLO_RATE_WINDOW}s.")
-            time.sleep(TRELLO_RATE_WINDOW)
-        if not response.ok:
-            raise RuntimeError(f"Trello {method} {path}: HTTP {response.status_code}: {response.text[:300]}")
-        return response.json()
-
-    def connect(self):
-        """Check the board and list before writing anything, and load the board's labels."""
-        board = self.request("GET", f"/boards/{self.board_id}", params={"fields": "name"})
-        target_list = self.request("GET", f"/lists/{self.list_id}", params={"fields": "name,idBoard"})
-        if target_list["idBoard"] != board["id"]:
-            raise RuntimeError(f"List {self.list_id} isn't on board {self.board_id}. Check config.json.")
-        print(f"Trello: board '{board['name']}', list '{target_list['name']}'")
-
-        labels = self.request("GET", f"/boards/{self.board_id}/labels", params={"limit": 1000})
-        self.labels = {label["name"]: label["id"] for label in labels if label["name"]}
-
-    def label_id(self, name):
-        """Return the ID of the label with this name, creating it the first time."""
-        if name not in self.labels:
-            label = self.request("POST", "/labels", json={"name": name, "color": None, "idBoard": self.board_id})
-            self.labels[name] = label["id"]
-            print(f"  Created label '{name}'")
-        return self.labels[name]
-
-
 def download_screenshot(card):
     """Return (bytes, None), or (None, reason) when there's nothing to upload."""
     if not card["screenshot"]:
@@ -220,18 +150,59 @@ def download_screenshot(card):
     return response.content, None
 
 
-def create_card(trello, card, config):
-    screenshot, problem = download_screenshot(card)
-    label_names = list(card["labels"])
+def no_screenshot_label(config):
+    return config.get("no_screenshot_label", "No screenshot")
+
+
+class Organizer:
+    """Claude's discipline labels and theme list for new reports. It reads the board once per run,
+    for the example cards and the ## lists, and only when there's something to ask about."""
+
+    def __init__(self, board):
+        self.board = board
+        self.prompts = None
+        self.label_ids = None
+
+    def prepare(self, cards=None):
+        if self.prompts is None:
+            self.prompts = self.board.prompts_for(cards if cards is not None else self.board.board_cards())
+        return self.prompts
+
+    def label_id(self, name):
+        """The ID of one of Claude's labels. The first call makes sure they all exist, with their colours,
+        so a dry run, which never gets here, writes nothing."""
+        if self.label_ids is None:
+            self.label_ids = ensure_labels(self.board)
+        return self.label_ids[name]
+
+    @property
+    def themes(self):
+        return self.prompts[2]
+
+    def decide(self, items):
+        label_prompt, theme_prompt, themes = self.prepare()
+        decisions = self.board.organize(items, label_prompt, theme_prompt, themes)
+        failed = [decision["error"] for decision in decisions.values() if decision["error"]]
+        if failed:
+            print(f"  Claude failed on {len(failed)} of {len(items)} reports, for example: {failed[0]}")
+        return decisions
+
+
+def create_card(trello, card, screenshot, decision, organizer, config):
+    """Create the card, with Claude's labels, in its theme list or Incoming. Returns its URL."""
+    label_ids = [trello.label_id(name) for name in card["labels"]]
     if screenshot is None:
-        print(f"  {card['message_id']}: {problem}")
-        label_names.append(config.get("no_screenshot_label", "No screenshot"))
+        label_ids.append(trello.label_id(no_screenshot_label(config)))
+    labels = decision["labels"] if decision else []
+    label_ids += [organizer.label_id(name) for name in labels]
+    theme = decision["theme"] if decision else None
+    list_id = organizer.themes[theme] if theme else trello.list_id
 
     created = trello.request("POST", "/cards", data={
-        "idList": trello.list_id,
+        "idList": list_id,
         "name": card["name"],
         "desc": card["desc"],
-        "idLabels": ",".join(trello.label_id(name) for name in label_names),
+        "idLabels": ",".join(label_ids),
         "pos": "bottom",
     })
     if screenshot:
@@ -244,11 +215,20 @@ def create_card(trello, card, config):
             # so keep it, mark it like any report without a screenshot, and carry on.
             print(f"  {card['message_id']}: screenshot upload failed ({error})")
             try:
-                no_screenshot = trello.label_id(config.get("no_screenshot_label", "No screenshot"))
-                trello.request("POST", f"/cards/{created['id']}/idLabels", params={"value": no_screenshot})
+                trello.request("POST", f"/cards/{created['id']}/idLabels",
+                               params={"value": trello.label_id(no_screenshot_label(config))})
             except (RuntimeError, requests.RequestException) as label_error:
                 print(f"  {card['message_id']}: couldn't add the label either ({label_error})")
-    print(f"  Created {created['shortUrl']}  {card['name']}")
+
+    if labels:
+        log_labels({"card": created["id"], "link": created["shortUrl"], "name": card["name"], "added_labels": labels,
+                    "marked_complete": False, "source": "Claude", "reason": decision["label_reason"]})
+    if theme:
+        log_move({"type": "move", "card": created["id"], "link": created["shortUrl"], "name": card["name"],
+                  "from": trello.list_id, "to": list_id, "to_name": theme, "model": organizer.board.model,
+                  "reason": decision["theme_reason"], "by": "sync"})
+    where = f" -> {theme}" if theme else ""
+    print(f"  Created {created['shortUrl']}  [{', '.join(labels) or 'no discipline label'}]{where}  {card['name']}")
 
 
 def embed_fields(embed):
@@ -330,18 +310,26 @@ def build_card(message, channel, config):
     }
 
 
-def print_card(card, config, existing_labels):
+def print_card(card, screenshot, decision, config, existing_labels):
     label_names = list(card["labels"])
-    screenshot = card["screenshot"]
-    if not screenshot:
-        label_names.append(config.get("no_screenshot_label", "No screenshot"))
+    if screenshot is None:
+        label_names.append(no_screenshot_label(config))
     labels = [name if name in existing_labels else f"{name} (new)" for name in label_names]
 
     print(f"\n--- CARD from {card['message_id']}")
     print(f"  name:   {card['name']}")
     print(f"  labels: {', '.join(labels)}")
+    if decision:
+        if decision["error"] and not decision["labels"]:
+            print(f"  Claude: failed ({decision['error']})")
+        else:
+            print(f"  Claude labels: {', '.join(decision['labels'])}  ({decision['label_reason']})")
+            if decision["theme"]:
+                print(f"  Claude list:   ## {decision['theme']}  ({decision['theme_reason']})")
+            else:
+                print("  Claude list:   stays in Incoming")
     if screenshot:
-        print(f"  screenshot: would upload screenshot.png ({screenshot['width']}x{screenshot['height']})")
+        print(f"  screenshot: would upload screenshot.png ({card['screenshot']['width']}x{card['screenshot']['height']})")
     else:
         print("  screenshot: none")
     print("  description:")
@@ -349,7 +337,16 @@ def print_card(card, config, existing_labels):
         print(f"    {line}")
 
 
-def run_channel(discord, trello, config, state, channel, args):
+def report_items(prepared, config):
+    """New reports as Claude sees them: the labels the card will have, and the screenshot already downloaded."""
+    items = []
+    for message_id, (card, screenshot, _) in prepared.items():
+        labels = list(card["labels"]) + ([] if screenshot else [no_screenshot_label(config)])
+        items.append(Board.report_item(message_id, card["name"], card["desc"], labels, screenshot))
+    return items
+
+
+def run_channel(discord, trello, organizer, config, state, channel, args):
     channel_id = config["channels"][channel]
     webhook_id = config.get("webhooks", {}).get(channel, "")
     if not webhook_id:
@@ -363,32 +360,49 @@ def run_channel(discord, trello, config, state, channel, args):
         print(f"\n##### Channel '{channel}' ({channel_id}), after message {after_id}")
         messages = fetch_messages(discord, channel_id, after_id)
 
+    # Decide what happens to each message first, so Claude can be asked about a batch of reports at once.
+    plan, reported = [], 0
+    for message in messages:
+        group, reason = classify(message, channel, webhook_id)
+        plan.append((message, group, reason))
+        if group in ("card", "skipped"):
+            reported += 1
+            if args.next and reported >= args.next:
+                break
+
     # The test mode and the dry run never mark messages or move the saved ID.
     tracking = not args.dry_run and not args.latest
     counts = {"card": 0, "skipped": 0, "done": 0, "ignored": 0}
-    for message in messages:
-        group, reason = classify(message, channel, webhook_id)
-        counts[group] += 1
-        if group == "card":
-            card = build_card(message, channel, config)
-            if args.dry_run:
-                print_card(card, config, trello.labels)
-            else:
-                create_card(trello, card, config)
-        elif group == "skipped":
-            print(f"\n--- SKIPPED {message['id']}: {reason}")
+    for start in range(0, len(plan), BATCH_SIZE):
+        batch = plan[start:start + BATCH_SIZE]
+        prepared = {}  # message ID -> (card, screenshot bytes or None, why there's no screenshot)
+        for message, group, _ in batch:
+            if group == "card":
+                card = build_card(message, channel, config)
+                prepared[message["id"]] = (card, *download_screenshot(card))
+        decisions = organizer.decide(report_items(prepared, config)) if organizer and prepared else {}
 
-        # The gear goes on only after the card and its screenshot exist, and the
-        # ID moves only after that. A failure before this point retries the report next run.
-        reported = group in ("card", "skipped")
-        if tracking:
-            if reported:
-                add_marker(discord, channel_id, message["id"])
-            state[channel_id] = message["id"]
-            save_state(state)
+        for message, group, reason in batch:
+            counts[group] += 1
+            if group == "card":
+                card, screenshot, problem = prepared[message["id"]]
+                if screenshot is None:
+                    print(f"  {card['message_id']}: {problem}")
+                decision = decisions.get(message["id"])
+                if args.dry_run:
+                    print_card(card, screenshot, decision, config, trello.labels)
+                else:
+                    create_card(trello, card, screenshot, decision, organizer, config)
+            elif group == "skipped":
+                print(f"\n--- SKIPPED {message['id']}: {reason}")
 
-        if reported and args.next and counts["card"] + counts["skipped"] >= args.next:
-            break
+            # The gear goes on only after the card and its screenshot exist, and the
+            # ID moves only after that. A failure before this point retries the report next run.
+            if tracking:
+                if group in ("card", "skipped"):
+                    add_marker(discord, channel_id, message["id"])
+                state[channel_id] = message["id"]
+                save_state(state)
 
     verb = "cards" if args.dry_run else "cards created"
     print(f"\n'{channel}': {counts['card']} {verb}, {counts['skipped']} skipped,"
@@ -397,49 +411,37 @@ def run_channel(discord, trello, config, state, channel, args):
         print(f"  Saved progress: after message {state.get(channel_id, 'none')}")
 
 
-def start_log(arguments):
-    """Send all output, errors and tracebacks included, to the log file."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if LOG_PATH.exists() and LOG_PATH.stat().st_size > LOG_MAX_BYTES:
-        os.replace(LOG_PATH, LOG_PATH.with_name("sync.log.old"))
-    log = open(LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
-    sys.stdout = sys.stderr = log
-    now = datetime.datetime.now(DANISH_TIME).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n===== {now} sync.py {' '.join(arguments)}")
-
-
-def lock_started(path):
-    return datetime.datetime.fromtimestamp(path.stat().st_mtime, DANISH_TIME).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def acquire_lock():
-    """Return True if this run now holds the lock, False if another run holds it."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):
-        try:
-            # Exclusive create fails if the file exists, so two runs can't both get it.
-            fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            try:
-                age = time.time() - LOCK_PATH.stat().st_mtime
-                started = lock_started(LOCK_PATH)
-            except FileNotFoundError:
-                continue  # the other run finished in between
-            if age < LOCK_MAX_AGE:
-                print(f"Another run is in progress (started {started}). Exiting.")
-                return False
-            print(f"Removing a stale lock from {started}, left by a run that didn't finish.")
-            LOCK_PATH.unlink(missing_ok=True)
+def organize_stragglers(trello, organizer):
+    """Label and place cards in Incoming that have no discipline label yet: reports from runs where
+    Claude couldn't be reached. Cheap when there are none: it only reads Incoming's labels."""
+    board = organizer.board
+    incoming = trello.request("GET", f"/lists/{trello.list_id}/cards", params={"fields": "labels,dueComplete"})
+    if not any(not board.has_board_label(card) and not card.get("dueComplete") for card in incoming):
+        return
+    cards = board.board_cards()
+    organizer.prepare(cards)
+    stragglers = [card for card in cards if card["idList"] == trello.list_id
+                  and not board.has_board_label(card) and not card.get("dueComplete")]
+    print(f"\nLabelling {len(stragglers)} cards in Incoming that have no discipline label yet.")
+    decisions = organizer.decide([board.card_item(card) for card in stragglers])
+    for card in stragglers:
+        decision = decisions[card["id"]]
+        if not decision["labels"]:
             continue
-        with os.fdopen(fd, "w") as f:
-            f.write(f"pid {os.getpid()}\n")
-        return True
-    print("Couldn't take the lock. Exiting.")
-    return False
-
-
-def release_lock():
-    LOCK_PATH.unlink(missing_ok=True)
+        for name in decision["labels"]:
+            trello.request("POST", f"/cards/{card['id']}/idLabels", params={"value": organizer.label_id(name)})
+        log_labels({"card": card["id"], "link": card_link(card), "name": card["name"], "added_labels": decision["labels"],
+                    "marked_complete": False, "source": "Claude", "reason": decision["label_reason"]})
+        theme = decision["theme"]
+        if theme:
+            current = trello.request("GET", f"/cards/{card['id']}", params={"fields": "idList,closed"})
+            if current["idList"] == trello.list_id and not current["closed"]:
+                trello.request("PUT", f"/cards/{card['id']}", params={"idList": organizer.themes[theme], "pos": "bottom"})
+                log_move({"type": "move", "card": card["id"], "link": card_link(card), "name": card["name"],
+                          "from": trello.list_id, "to": organizer.themes[theme], "to_name": theme,
+                          "model": board.model, "reason": decision["theme_reason"], "by": "sync"})
+        where = f" -> {theme}" if theme else ""
+        print(f"  Labelled {card_link(card)}  [{', '.join(decision['labels'])}]{where}  {card['name']}")
 
 
 def main():
@@ -451,12 +453,11 @@ def main():
                         help="process only the next N reports after the saved message ID")
     parser.add_argument("--latest", type=int, metavar="N",
                         help="test: create cards for the newest N reports only, with no reactions or saved state")
-    parser.add_argument("--log", action="store_true",
-                        help=f"write all output to {LOG_PATH} instead of the screen, for scheduled runs")
+    parser.add_argument("--log", action="store_true", help="write all output to sync.log instead of the screen, for scheduled runs")
     args = parser.parse_args()
 
     if args.log:
-        start_log(sys.argv[1:])
+        start_log("sync", sys.argv[1:])
     else:
         # Keep Danish letters and emoji from crashing the print when output is redirected.
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -472,7 +473,7 @@ def main():
 
     # Only runs that write need the lock. Another run holding it isn't a failure, so exit 0.
     locking = not args.dry_run
-    if locking and not acquire_lock():
+    if locking and not acquire_lock("sync.py"):
         return
     try:
         sync(args)
@@ -482,8 +483,10 @@ def main():
 
 
 def sync(args):
-    secrets = {name: keyring.get_password(KEYRING_SERVICE, name) for name, _ in SYNC_SECRETS}
-    missing = [prompt for name, prompt in SYNC_SECRETS if not secrets[name]]
+    needed = [(KEYRING_DISCORD_TOKEN, "Discord bot token"), (KEYRING_TRELLO_KEY, "Trello API key"),
+              (KEYRING_TRELLO_TOKEN, "Trello token")]
+    secrets = {name: get_secret(name) for name, _ in needed}
+    missing = [prompt for name, prompt in needed if not secrets[name]]
     if missing:
         sys.exit(f"Not stored: {', '.join(missing)}. Run: python sync.py --set-secrets")
 
@@ -496,16 +499,30 @@ def sync(args):
     discord.headers["User-Agent"] = "DiscordBot (darkswarm-bug-sync, 0.1)"
     trello = Trello(secrets[KEYRING_TRELLO_KEY], secrets[KEYRING_TRELLO_TOKEN], config)
 
+    # Without an Anthropic key, reports still become cards, just without discipline labels.
+    organizer = None
+    anthropic_key = get_secret(KEYRING_ANTHROPIC_KEY)
+    if anthropic_key:
+        organizer = Organizer(make_board(config, trello, anthropic_key))
+    else:
+        print("No Anthropic API key stored: new cards get no discipline labels. Run: python sync.py --set-secrets")
+
     try:
         trello.connect()
+        if organizer and not args.dry_run and not args.latest:
+            organize_stragglers(trello, organizer)
         for channel in channels:
             if not config["channels"].get(channel):
                 print(f"\nSkipping '{channel}': no channel ID in config.json.")
                 continue
-            run_channel(discord, trello, config, state, channel, args)
-    except (RuntimeError, requests.RequestException) as error:
+            run_channel(discord, trello, organizer, config, state, channel, args)
+    except (RuntimeError, requests.RequestException, anthropic.APIError) as error:
         # Stop at the first failure so nothing is skipped past. The next run retries it.
         sys.exit(f"\nStopped: {error}")
+    finally:
+        if organizer and organizer.board.usage["calls"]:
+            organizer.board.save_answers()
+            print(f"Claude: {organizer.board.usage['calls']} calls, ${organizer.board.cost():.3f}")
 
 
 if __name__ == "__main__":

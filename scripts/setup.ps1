@@ -31,6 +31,7 @@ Write-Host '3/4  Installing packages'
 if ($LASTEXITCODE -ne 0) { Write-Host 'Installing packages failed.'; exit 1 }
 
 Write-Host '4/4  Storing secrets (Discord bot token, Trello API key, Trello token, Anthropic API key)'
+Write-Host '     The Anthropic key labels and sorts new reports. Without it, reports still arrive, unlabelled.'
 & $python sync.py --set-secrets
 if ($LASTEXITCODE -ne 0) { Write-Host 'Storing secrets failed.'; exit 1 }
 

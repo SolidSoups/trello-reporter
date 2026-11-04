@@ -28,11 +28,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-import keyring
-
-from sync import (
-    DANISH_TIME, DATA_DIR, KEYRING_SERVICE, KEYRING_TRELLO_KEY, KEYRING_TRELLO_TOKEN,
-    MAX_RETRIES, TIMEOUT, TRELLO_API, TRELLO_RATE_WINDOW, Trello, load_config,
+from common import (
+    DANISH_TIME, DATA_DIR, KEYRING_TRELLO_KEY, KEYRING_TRELLO_TOKEN, MAX_RETRIES, TIMEOUT, TRELLO_API,
+    TRELLO_RATE_WINDOW, Trello, get_secret, load_config, start_log,
 )
 
 DEFAULT_SNAPSHOTS_DIR = DATA_DIR / "snapshots"
@@ -121,8 +119,10 @@ def save_attachments(trello, board, folder):
             except Exception as error:  # one missing file shouldn't stop the backup
                 failed += 1
                 print(f"\n  {futures[future]['id']}: {type(error).__name__}: {error}")
-            print(f"\r  {done}/{len(missing)}", end="", flush=True)
-    print()
+            if sys.stdout.isatty():
+                print(f"\r  {done}/{len(missing)}", end="", flush=True)
+    if sys.stdout.isatty():
+        print()
     return len(missing) - failed, total - len(missing), failed
 
 
@@ -166,11 +166,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--note", default="", help="a few words added to the file name, such as before-moving-cards")
     parser.add_argument("--no-attachments", action="store_true", help="save the board only, skip the screenshots")
+    parser.add_argument("--log", action="store_true", help="write all output to backup.log, for the nightly scheduled run")
     args = parser.parse_args()
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if args.log:
+        start_log("backup", sys.argv[1:])
+    else:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    key = keyring.get_password(KEYRING_SERVICE, KEYRING_TRELLO_KEY)
-    token = keyring.get_password(KEYRING_SERVICE, KEYRING_TRELLO_TOKEN)
+    key = get_secret(KEYRING_TRELLO_KEY)
+    token = get_secret(KEYRING_TRELLO_TOKEN)
     if not key or not token:
         sys.exit("The Trello key and token must be stored. Run: python sync.py --set-secrets")
     config = load_config()
