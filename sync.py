@@ -36,10 +36,15 @@ import re
 import sys
 import time
 
-import anthropic
 import requests
 
-from claude_board import Board, card_link, ensure_labels, log_labels, log_move, make_board
+# Reports must keep arriving even on a PC where setup.cmd hasn't installed the Claude packages yet.
+try:
+    import anthropic
+    from claude_board import Board, card_link, ensure_labels, log_labels, log_move, make_board
+    CLAUDE_MISSING = None
+except ImportError as error:
+    CLAUDE_MISSING = error
 from common import (
     DANISH_TIME, DATA_DIR, KEYRING_ANTHROPIC_KEY, KEYRING_DISCORD_TOKEN, KEYRING_TRELLO_KEY,
     KEYRING_TRELLO_TOKEN, MAX_RETRIES, TIMEOUT, Trello, acquire_lock, get_secret, load_config,
@@ -502,11 +507,15 @@ def sync(args):
     # Without an Anthropic key, reports still become cards, just without discipline labels.
     organizer = None
     anthropic_key = get_secret(KEYRING_ANTHROPIC_KEY)
-    if anthropic_key:
+    if CLAUDE_MISSING:
+        print(f"No Anthropic API key in use: the Claude packages aren't installed ({CLAUDE_MISSING})."
+              " New cards get no discipline labels. Run setup.cmd.")
+    elif anthropic_key:
         organizer = Organizer(make_board(config, trello, anthropic_key))
     else:
         print("No Anthropic API key stored: new cards get no discipline labels. Run: python sync.py --set-secrets")
 
+    claude_errors = (anthropic.APIError,) if not CLAUDE_MISSING else ()
     try:
         trello.connect()
         if organizer and not args.dry_run and not args.latest:
@@ -516,7 +525,7 @@ def sync(args):
                 print(f"\nSkipping '{channel}': no channel ID in config.json.")
                 continue
             run_channel(discord, trello, organizer, config, state, channel, args)
-    except (RuntimeError, requests.RequestException, anthropic.APIError) as error:
+    except (RuntimeError, requests.RequestException, *claude_errors) as error:
         # Stop at the first failure so nothing is skipped past. The next run retries it.
         sys.exit(f"\nStopped: {error}")
     finally:
