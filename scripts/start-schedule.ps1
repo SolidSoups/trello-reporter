@@ -1,7 +1,7 @@
 # Starts the three scheduled jobs and runs the sync once right away:
 #   DarkSwarm Bug Sync      every 15 minutes  sync.py --log         new reports become labelled, sorted cards
 #   DarkSwarm Bug Sort      every hour        sort.py --sort --apply --log   cards in Incoming find new ## lists
-#   DarkSwarm Board Backup  every night 03:00 backup.py --log       snapshot of the board and new screenshots
+#   DarkSwarm Board Backup  every night 03:00 backup.py --log       snapshot of the board (screenshots stay in Discord)
 # Running it again replaces the existing schedule.
 
 $ErrorActionPreference = 'Stop'
@@ -22,10 +22,9 @@ $jobs = @(
     @{ Name = 'DarkSwarm Bug Sort'; Arguments = 'sort.py --sort --apply --log'
        Trigger = New-ScheduledTaskTrigger -Once -At $now.AddMinutes(7) -RepetitionInterval (New-TimeSpan -Hours 1)
        Limit = New-TimeSpan -Hours 1 },
-    # The first night downloads every screenshot, so it gets more time.
     @{ Name = 'DarkSwarm Board Backup'; Arguments = 'backup.py --log'
        Trigger = New-ScheduledTaskTrigger -Daily -At '03:00'
-       Limit = New-TimeSpan -Hours 4 }
+       Limit = New-TimeSpan -Hours 1 }
 )
 
 # The tasks run as you, because the secrets are in your Credential Manager.

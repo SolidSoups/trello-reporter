@@ -195,7 +195,7 @@ Every report gets one or two discipline labels, each with its own colour:
    - **The sync labels and places new reports (built 2026-11-04).** For each batch of up to 20 new reports, Claude is asked for the labels and a `##` list, 4 reports at a time, and then the cards are created in order, straight into their list or Incoming. Progress is still saved per report. A flood of 200 reports takes about 5 minutes. If Claude can't be reached or no key is stored, cards arrive unlabelled in Incoming, and the next run labels and places them.
    - **The sort runs every hour** on the build computer, so cards in Incoming find lists the team creates later. A run where nothing changed asks Claude nothing and costs nothing. It takes a snapshot only when it's about to move cards.
    - **The sync and the sort share one lock,** so they never write to the board at the same time.
-   - **A backup runs every night at 03:00.**
+   - **A backup runs every night at 03:00.** It saves the board only. Screenshots stay in Discord: each card links to its message, and fetching the message again gives a fresh screenshot link. `backup.py --attachments` saves them too, for a full copy now and then.
    - No comments on moved cards. Reasons go in the run report and `moves.jsonl`.
 
 ### Choosing a model

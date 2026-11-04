@@ -6,12 +6,18 @@ Each run writes one file named after the date and time it was taken:
 
 It holds every card (archived ones too) with its list, position, labels,
 completion, name and description, plus every list, label, checklist, custom
-field and comment. Uploaded attachments (the screenshots) are saved once into
-snapshots\\attachments\\ and never downloaded again, since they don't change.
+field and comment.
+
+Screenshots aren't saved by default. Every card made by the sync links to its
+Discord message, and fetching that message again gives a fresh link to the same
+screenshot, so a restore can take it from there. That fails only if the Discord
+message is deleted, or for files someone attached to a card by hand.
+--attachments also saves every uploaded attachment into snapshots\\attachments\\,
+once each, for a full copy now and then.
 
     python backup.py
     python backup.py --note before-moving-cards
-    python backup.py --no-attachments      (board only, much faster)
+    python backup.py --attachments         (also the screenshots: a few GB the first time)
 
 Set "snapshots_dir" in config.json to keep the snapshots somewhere else, such
 as a OneDrive folder. Snapshots contain player names and reports: never put
@@ -126,7 +132,7 @@ def save_attachments(trello, board, folder):
     return len(missing) - failed, total - len(missing), failed
 
 
-def take_snapshot(trello, config, note="", attachments=True):
+def take_snapshot(trello, config, note="", attachments=False):
     """Save a snapshot of the board and return its path."""
     folder = snapshots_dir(config)
     folder.mkdir(parents=True, exist_ok=True)
@@ -165,7 +171,8 @@ def take_snapshot(trello, config, note="", attachments=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--note", default="", help="a few words added to the file name, such as before-moving-cards")
-    parser.add_argument("--no-attachments", action="store_true", help="save the board only, skip the screenshots")
+    parser.add_argument("--attachments", action="store_true",
+                        help="also save uploaded attachments (the screenshots); a few GB the first time")
     parser.add_argument("--log", action="store_true", help="write all output to backup.log, for the nightly scheduled run")
     args = parser.parse_args()
     if args.log:
@@ -179,7 +186,7 @@ def main():
         sys.exit("The Trello key and token must be stored. Run: python sync.py --set-secrets")
     config = load_config()
     try:
-        take_snapshot(Trello(key, token, config), config, args.note, not args.no_attachments)
+        take_snapshot(Trello(key, token, config), config, args.note, args.attachments)
     except RuntimeError as error:
         sys.exit(f"Stopped: {error}")
 

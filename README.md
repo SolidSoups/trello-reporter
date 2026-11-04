@@ -8,7 +8,7 @@ On the build computer, three jobs run by themselves:
 |---|---|---|
 | Sync (`sync.py`) | Every 15 minutes | New reports become labelled cards, in a `##` list or Incoming |
 | Sort (`sort.py --sort --apply`) | Every hour | Cards waiting in Incoming move into `##` lists that fit them, including lists created since |
-| Backup (`backup.py`) | Every night at 03:00 | A snapshot of the board, plus any new screenshots |
+| Backup (`backup.py`) | Every night at 03:00 | A snapshot of the board. Screenshots stay in Discord |
 
 These four files in the repo folder control them. Double-click them:
 
@@ -110,12 +110,13 @@ Not needed on the build computer. For testing, in PowerShell, in the repo folder
 
 | Command | Does |
 |---|---|
-| `.\.venv\Scripts\python.exe backup.py` | Snapshot plus any screenshots not saved yet |
+| `.\.venv\Scripts\python.exe backup.py` | Snapshot of the board, takes a few seconds |
 | `.\.venv\Scripts\python.exe backup.py --note before-moving-cards` | The same, with a note in the file name |
-| `.\.venv\Scripts\python.exe backup.py --no-attachments` | Board only, takes a few seconds |
+| `.\.venv\Scripts\python.exe backup.py --attachments` | Also saves the screenshots, into `snapshots\attachments\`, once each. A few GB the first time |
 
-- Screenshots go into `snapshots\attachments\`, once each. The first run downloads all of them (a few GB, which takes a while); later runs only fetch new ones.
-- `sort.py --label --apply` takes a snapshot by itself before it writes anything (`..._before-label-apply.json.gz`).
+- **Screenshots aren't saved by default.** Each card links to its Discord message, and fetching that message again gives a fresh link to the screenshot. That only fails if the Discord message is deleted, or for files someone attached to a card by hand. Run `--attachments` now and then for a full copy.
+- The nightly backup on the build computer saves the board only.
+- `sort.py --label --apply`, `sort.py --sort --apply` and `--undo-moves` take a snapshot by themselves before they write anything.
 - To keep snapshots somewhere else, such as a OneDrive folder, set `"snapshots_dir"` in `config.json`. Never put them in the git repo: they contain player names.
 - There's no restore script yet. A snapshot already lets you see where every card was and which labels it had.
 
