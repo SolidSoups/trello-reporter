@@ -1,12 +1,13 @@
 """Ask Claude which discipline labels each bug report on the Trello board should get.
 
---evaluate runs the cards the team has already sorted into discipline lists
-through Claude and compares its labels with the team's lists. It only reads.
+--evaluate runs the cards whose discipline labels a person chose through
+Claude and compares its labels with theirs. A person chose them if the team
+set them, or changed them after Claude did (label_changes.jsonl says which
+labels Claude set). It only reads.
 
 --label gives every open card on the board its discipline labels:
-  - cards in a discipline list (Incoming Tech, ...) get the matching label,
   - cards in Unactionable get the Unactionable label,
-  - every other card (Incoming, DONE, theme lists) is labelled by Claude,
+  - every other card is labelled by Claude,
   - cards in DONE are also marked complete.
 A card that already has a discipline label is left alone. Without --apply it
 only writes a preview report. It never moves a card.
@@ -137,11 +138,10 @@ def screenshot_attachment(card):
 class Sorter:
     def __init__(self, config, model, trello, client):
         self.sorting = config["sorting"]
-        self.lists = self.sorting["lists"]  # discipline name -> ID of its old list
-        self.disciplines = list(self.lists)
         self.uncategorized = self.sorting["uncategorized_label"]
         self.unactionable = self.sorting["unactionable_label"]
         self.label_colors = self.sorting["labels"]  # every label this script sets -> colour
+        self.disciplines = [name for name in self.label_colors if name not in (self.uncategorized, self.unactionable)]
         self.model = model
         self.trello = trello
         self.client = client
@@ -167,12 +167,10 @@ class Sorter:
                            and (self.show_discipline_labels or label["name"] not in self.label_colors))
         return f"Title: {card['name']}\nLabels: {labels or 'none'}\n\n" + "\n".join(lines).strip()
 
-    def list_cards(self, list_id):
-        return self.trello.request("GET", f"/lists/{list_id}/cards", params={
-            "fields": "name,desc,labels,idList,shortLink,dueComplete",
-            "attachments": "true",
-            "attachment_fields": "id,name,mimeType",
-        })
+    def discipline_labels(self, card):
+        """The card's discipline labels, in a fixed order."""
+        names = {label["name"] for label in card["labels"]}
+        return [name for name in self.disciplines if name in names]
 
     def board_cards(self):
         return self.trello.request("GET", f"/boards/{self.trello.board_id}/cards/open", params={
@@ -194,7 +192,8 @@ class Sorter:
 
     def build_sort_prompt(self, theme_cards):
         """System prompt for sorting into theme lists: instructions, the themes with any notes, and example cards.
-        Creating or renaming a list changes it, so every card gets asked again."""
+        Creating or renaming a list changes it, so every card gets asked again. Examples are cards a person
+        put in the list where possible, so a wrong move by the bot doesn't teach it to repeat the mistake."""
         self.show_discipline_labels = True
         parts = [SORT_INSTRUCTIONS, "<themes>"]
         parts += [f"- {name}" for name in theme_cards]
@@ -202,9 +201,9 @@ class Sorter:
         if THEMES_PATH.exists():
             parts.append(f"<theme_notes>\n{THEMES_PATH.read_text(encoding='utf-8').strip()}\n</theme_notes>")
         parts.append("<examples>")
+        moved_by_bot = bot_moved_cards()
         for name, cards in theme_cards.items():
-            usable = [card for card in sorted(cards, key=lambda c: c["id"]) if len(report_text(card)) >= MIN_EXAMPLE_TEXT]
-            for card in usable[:EXAMPLES_PER_LIST]:
+            for card in pick_examples(cards, EXAMPLES_PER_LIST, avoid=moved_by_bot):
                 parts.append(f"<example theme=\"{name}\">\n{self.card_content(card)}\n</example>")
         parts.append("</examples>")
         self.system = "\n\n".join(parts)
@@ -337,12 +336,53 @@ def one_line(text, length=120):
     return text if len(text) <= length else text[:length - 3] + "..."
 
 
-def pick_examples(sorted_cards):
-    """Up to 3 cards per list, never more than half the list, oldest first, so every run picks the same ones."""
+def read_log(path):
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def bot_moved_cards():
+    """IDs of cards whose last logged move was made by the bot and not undone."""
+    latest = {}
+    for entry in read_log(MOVE_LOG_PATH):
+        latest[entry["card"]] = entry["type"]
+    return {card for card, kind in latest.items() if kind == "move"}
+
+
+def claude_labels():
+    """{card ID: set of labels Claude added}, from the label log."""
+    return {entry["card"]: set(entry["added_labels"]) for entry in read_log(LABEL_LOG_PATH) if entry.get("source") == "Claude"}
+
+
+def pick_examples(cards, count, avoid=frozenset()):
+    """Up to count cards, oldest first, so every run picks the same ones. Cards in avoid were placed by
+    the bot, and are only used when there aren't enough others, so the bot doesn't learn from its own mistakes."""
+    usable = [card for card in sorted(cards, key=lambda c: c["id"]) if len(report_text(card)) >= MIN_EXAMPLE_TEXT]
+    preferred = [card for card in usable if card["id"] not in avoid]
+    return (preferred + [card for card in usable if card["id"] in avoid])[:count]
+
+
+def team_labelled(sorter, cards):
+    """{card ID: discipline labels} for cards whose labels came from a person: set by the team, or changed
+    after Claude set them. On a PC without the label log, every labelled card counts."""
+    by_claude = claude_labels()
+    truth = {}
+    for card in cards:
+        labels = sorter.discipline_labels(card)
+        if labels and set(labels) != by_claude.get(card["id"]):
+            truth[card["id"]] = labels
+    return truth
+
+
+def label_examples(sorter, cards, truth, for_test=False):
+    """Example cards for the labelling prompt: per discipline, cards the team gave only that label.
+    For a test, at most half of each group, so there are cards left to test."""
     examples = {}
-    for name, cards in sorted_cards.items():
-        usable = [card for card in sorted(cards, key=lambda c: c["id"]) if len(report_text(card)) >= MIN_EXAMPLE_TEXT]
-        examples[name] = usable[:min(EXAMPLES_PER_LIST, len(cards) // 2)]
+    for name in sorter.disciplines:
+        group = [card for card in cards if truth.get(card["id"]) == [name]]
+        count = min(EXAMPLES_PER_LIST, len(group) // 2) if for_test else EXAMPLES_PER_LIST
+        examples[name] = pick_examples(group, count)
     return examples
 
 
@@ -370,14 +410,18 @@ def write_report(name, lines):
 
 
 def evaluate(sorter, limit):
-    names_by_id = {list_id: name for name, list_id in sorter.lists.items()}
-    sorted_cards = {name: sorter.list_cards(list_id) for name, list_id in sorter.lists.items()}
-    examples = pick_examples(sorted_cards)
+    """Compare Claude's labels with the discipline labels a person chose."""
+    if not LABEL_LOG_PATH.exists():
+        print(f"No label log on this PC ({LABEL_LOG_PATH.name}), so Claude's own labels can't be told apart"
+              " from the team's. Testing against every labelled card.")
+    cards = sorter.board_cards()
+    truth = team_labelled(sorter, cards)
+    examples = label_examples(sorter, cards, truth, for_test=True)
     sorter.build_prompt(examples)
 
-    example_ids = {card["id"] for cards in examples.values() for card in cards}
-    test = [card for cards in sorted_cards.values() for card in cards if card["id"] not in example_ids]
-    print(f"{len(test)} sorted cards to test, {len(example_ids)} used as examples.")
+    example_ids = {card["id"] for group in examples.values() for card in group}
+    test = [card for card in cards if card["id"] in truth and card["id"] not in example_ids]
+    print(f"{len(test)} cards labelled by the team to test, {len(example_ids)} used as examples.")
     if limit and limit < len(test):
         test = random.Random(SAMPLE_SEED).sample(sorted(test, key=lambda c: c["id"]), limit)
         print(f"Testing a sample of {limit}.")
@@ -390,7 +434,7 @@ def evaluate(sorter, limit):
     disagreements, unsure, errors = [], [], []
     two_labels = 0
     for card in test:
-        team = names_by_id[card["idList"]]
+        team = " + ".join(truth[card["id"]])
         answer = results[card["id"]]
         if isinstance(answer, str):
             per_list[team]["error"] += 1
@@ -401,7 +445,7 @@ def evaluate(sorter, limit):
         if labels in ([sorter.uncategorized], [sorter.unactionable]):
             per_list[team]["unsure"] += 1
             unsure.append((card, team, labels[0], answer))
-        elif team in labels:
+        elif set(labels) & set(truth[card["id"]]):
             per_list[team]["agree"] += 1
         else:
             per_list[team]["disagree"] += 1
@@ -409,13 +453,10 @@ def evaluate(sorter, limit):
             disagreements.append((card, team, labels, answer))
 
     lines = report_header("Labelling evaluation", sorter, len(test), cached)
-    lines += ["Agree: one of Claude's labels is the team's list. Unsure: Claude chose Uncategorized or Unactionable.", "",
-              "| List | Tested | Agree | Disagree | Unsure | Error |", "|---|---|---|---|---|---|"]
+    lines += ["Agree: Claude and the team share at least one label. Unsure: Claude chose Uncategorized or Unactionable.", "",
+              "| Team's labels | Tested | Agree | Disagree | Unsure | Error |", "|---|---|---|---|---|---|"]
     total = collections.Counter()
-    for name in sorter.disciplines:
-        counts = per_list.get(name)
-        if not counts:
-            continue
+    for name, counts in sorted(per_list.items(), key=lambda item: -sum(item[1].values())):
         tested = sum(counts.values())
         total.update(counts)
         lines.append(f"| {name} | {tested} | {counts['agree']} | {counts['disagree']} | {counts['unsure']} | {counts['error']} |")
@@ -425,7 +466,7 @@ def evaluate(sorter, limit):
         lines += ["", f"When Claude gave discipline labels, one of them matched the team on {total['agree']} of {labelled}"
                       f" cards ({100 * total['agree'] / labelled:.0f}%). It gave two labels on {two_labels} cards."]
 
-    lines += ["", "## Most common disagreements", "", "| Team's list | Claude's labels | Cards |", "|---|---|---|"]
+    lines += ["", "## Most common disagreements", "", "| Team's labels | Claude's labels | Cards |", "|---|---|---|"]
     lines += [f"| {team} | {claude} | {count} |" for (team, claude), count in confusions.most_common()]
 
     lines += ["", "## Disagreements", ""]
@@ -468,16 +509,11 @@ def ensure_labels(sorter):
 def label_board(sorter, config, limit, apply):
     lists = sorter.trello.request("GET", f"/boards/{sorter.trello.board_id}/lists", params={"fields": "name"})
     list_names = {lst["id"]: lst["name"] for lst in lists}
-    discipline_by_list = {list_id: name for name, list_id in sorter.lists.items()}
     unactionable_list = sorter.sorting["unactionable_list_id"]
     done_list = sorter.sorting["done_list_id"]
 
     cards = sorted(sorter.board_cards(), key=lambda c: c["id"])
-    sorted_cards = collections.defaultdict(list)
-    for card in cards:
-        if card["idList"] in discipline_by_list:
-            sorted_cards[discipline_by_list[card["idList"]]].append(card)
-    sorter.build_prompt(pick_examples({name: sorted_cards[name] for name in sorter.disciplines}))
+    sorter.build_prompt(label_examples(sorter, cards, team_labelled(sorter, cards)))
 
     # Decide where each card's labels come from. Cards that already have one of our labels are done.
     todo, already = [], 0
@@ -495,8 +531,7 @@ def label_board(sorter, config, limit, apply):
     def is_labelled(card):
         return any(label["name"] in sorter.label_colors for label in card["labels"])
 
-    to_ask = [card for card in todo if not is_labelled(card)
-              and card["idList"] not in discipline_by_list and card["idList"] != unactionable_list]
+    to_ask = [card for card in todo if not is_labelled(card) and card["idList"] != unactionable_list]
     results = sorter.ask_all(to_ask)
     cached = len(to_ask) - sorter.usage["calls"]
 
@@ -505,8 +540,6 @@ def label_board(sorter, config, limit, apply):
         complete = card["idList"] == done_list and not card.get("dueComplete")
         if is_labelled(card):
             plan.append((card, [], "labels already set", "", complete))
-        elif card["idList"] in discipline_by_list:
-            plan.append((card, [discipline_by_list[card["idList"]]], "team's list", "", complete))
         elif card["idList"] == unactionable_list:
             plan.append((card, [sorter.unactionable], "team's list", "", complete))
         else:
@@ -724,13 +757,20 @@ def undo_moves(trello, config, since):
         sys.exit("Nothing was moved.")
 
     take_snapshot(trello, config, "before-undo-moves", attachments=False)
-    undone = 0
+    undone, moved_meanwhile = 0, 0
     for entry in to_undo:
+        # Someone may have moved the card while the question was waiting for an answer.
+        current = trello.request("GET", f"/cards/{entry['card']}", params={"fields": "idList,closed"})
+        if current["idList"] != entry["to"] or current["closed"]:
+            moved_meanwhile += 1
+            continue
         trello.request("PUT", f"/cards/{entry['card']}", params={"idList": entry["from"], "pos": "bottom"})
         undone += 1
         log_move({"type": "undo", "card": entry["card"], "link": entry["link"], "name": entry["name"],
                   "from": entry["to"], "to": entry["from"]})
     print(f"Moved {undone} cards back. Every undo is logged in {MOVE_LOG_PATH}.")
+    if moved_meanwhile:
+        print(f"{moved_meanwhile} were moved by someone while you were confirming, and were left alone.")
 
 
 def main():

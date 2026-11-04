@@ -104,13 +104,14 @@ Not needed on the build computer. For testing, in PowerShell, in the repo folder
 | `.\.venv\Scripts\python.exe sort.py --label --limit 20` | Preview: the labels the first 20 unlabelled cards would get. Writes nothing to the board |
 | `.\.venv\Scripts\python.exe sort.py --label` | Preview for every card |
 | `.\.venv\Scripts\python.exe sort.py --label --apply` | Writes the labels, and marks cards in DONE complete |
-| `.\.venv\Scripts\python.exe sort.py --evaluate --model haiku` | Tests Claude against the cards the team sorted into discipline lists |
+| `.\.venv\Scripts\python.exe sort.py --evaluate --model haiku` | Tests Claude against the labels a person chose. Reads only |
 
 Where labels come from with `--label`:
-- a card in a discipline list (Incoming Tech, ...) gets that list's label, without asking Claude
 - a card in Unactionable gets the Unactionable label
-- every other card (Incoming, DONE, theme lists) is labelled by Claude
+- every other card is labelled by Claude
 - a card that already has a discipline label is left alone, so running it again is safe
+
+**Which labels count as the team's:** labels the team set, and labels someone changed after Claude set them. `label_changes.jsonl` records what Claude set, so the scripts can tell the two apart. `--evaluate` tests against these, and `--label` takes its example cards from them. So when someone fixes a wrong label in Trello, Claude learns from it. On a PC without that log, every label counts as the team's.
 
 The labels are created with their colours the first time `--apply` runs. Every change is logged in `label_changes.jsonl`. To undo everything, delete the discipline labels on the board in Trello (board menu, Labels): that removes them from every card.
 
@@ -128,9 +129,10 @@ The labels are created with their colours the first time `--apply` runs. Every c
 - **Only cards in Incoming are moved.** DONE is never touched.
 - **Automatic sorting is on for a list when its name starts with `##`.** `## Soft locking` gets cards sorted into it; `UI issues` doesn't. Rename a list to turn it on or off. Claude sees the name without the `##`. Incoming, DONE and Unactionable never take part, whatever their names.
 - **Cards that stay in Incoming:** no theme fits, Uncategorized or Unactionable, marked complete, or no discipline label yet.
-- **How Claude knows the themes:** the list names, plus up to 3 cards already in each list as examples. The more the team sorts by hand, the better the bot gets. If a name is ambiguous, write a line about it in `themes.md` in the repo folder (for example "Soft locking: the mission can't continue. Not for doors."). The file is optional.
+- **How Claude knows the themes:** the list names, plus up to 3 cards already in each list as examples. Examples are cards a person put there; cards the bot moved are only used when a list has nothing else, so a wrong move doesn't teach the bot to repeat it. The more the team sorts by hand, the better the bot gets. If a name is ambiguous, write a line about it in `themes.md` in the repo folder (for example "Soft locking: the mission can't continue. Not for doors."). The file is optional.
 - **Cost:** turning a list on or off, renaming it or filling it changes what Claude is told, so every card is asked again on the next run. That's about $0.15 for 450 cards with Haiku. A rerun with no changes is free.
-- **Undo** only moves a card back if it's still in the list the bot put it in. Every move and undo is logged in `moves.jsonl`.
+- **Undo** only moves a card back if it's still in the list the bot put it in, checked again right before each move. Every move and undo is logged in `moves.jsonl`.
+- **The logs are per PC.** `moves.jsonl` and `label_changes.jsonl` live on the PC that ran the command. Run `--apply` and `--undo-moves` on one machine, or undo and the "team's labels" check won't know what the bot did.
 
 `--model` is `haiku`, `sonnet` or `opus`. Without it, the model in `config.json` under `sorting` is used (Haiku). `--limit` with `--evaluate` picks the same cards every run, so models can be compared on the same set.
 

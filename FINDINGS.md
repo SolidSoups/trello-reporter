@@ -112,7 +112,7 @@ Tested 2026-11-03 against the test board with `--latest 5` on the public channel
 
 Messages are handled one at a time, oldest first. The saved ID lives in `%LOCALAPPDATA%\darkswarm-bug-sync\state.json`, one entry per channel, and moves after every message. That includes chatter and reports that already carry the bot's ⚙️. With no saved ID, the run starts from the beginning of the channel.
 
-For a report, the order is: create the card, upload the screenshot, add ⚙️, save the ID. A failure stops the run before the ID moves, so the next run retries that report. `--next N` counts only reports that got a ⚙️ (cards and skipped reports), not chatter or reports that were already done.
+For a report, the order is: create the card, upload the screenshot, add ⚙️, save the ID. A failure stops the run before the ID moves, so the next run retries that report. The exception is a failed screenshot upload: the card already exists then, so retrying would create it twice. The card is kept, gets the "No screenshot" label, and the run carries on. `--next N` counts only reports that got a ⚙️ (cards and skipped reports), not chatter or reports that were already done.
 
 The bot needs **Add Reactions** on the channel. Without it, the first report gets a card, the ⚙️ fails, and the run stops.
 
@@ -142,7 +142,7 @@ The marker is the gear reaction ⚙️ (`:gear:`). Teammates use ✅ in the chan
 
 The ⚙️ reaction and the saved last-message ID both mean "processed", not "uploaded". A report is processed once the script has finished with it, either way:
 
-- **Card created:** the ⚙️ goes on after the card and its attachments exist, as before. A crash in between retries the report.
+- **Card created:** the ⚙️ goes on after the card and its attachments exist, as before. A crash in between retries the report. A failed screenshot upload doesn't count as a crash: the card is kept with the "No screenshot" label (see Running).
 - **Skipped** (fails the public channel check): it gets the ⚙️ too, and the skip is logged once. It is never looked at again.
 
 The saved ID in `%LOCALAPPDATA%` moves to each message as soon as that message is processed, so the next run starts after it.
@@ -183,7 +183,7 @@ Every report gets one or two discipline labels, each with its own colour:
 
 ### Moving to the new workflow
 1. **Labels first.** Each card gets its discipline label:
-   - Cards in a discipline list (Incoming Tech, Incoming UI, ...) get the matching label. The team sorted them, so Claude isn't asked.
+   - Cards in a discipline list (Incoming Tech, Incoming UI, ...) got the matching label. The team sorted them, so Claude wasn't asked. (This was a one-off for the switch-over. The old lists are gone, and `config.json` no longer lists them.)
    - Cards in Unactionable get the Unactionable label.
    - Cards in Incoming and DONE are labelled by Claude (Haiku 5.5) using `disciplines.md`.
    - Cards in DONE are also marked complete.

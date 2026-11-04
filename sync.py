@@ -235,9 +235,19 @@ def create_card(trello, card, config):
         "pos": "bottom",
     })
     if screenshot:
-        trello.request("POST", f"/cards/{created['id']}/attachments",
-                       data={"name": "screenshot.png", "mimeType": "image/png"},
-                       files={"file": ("screenshot.png", screenshot, "image/png")})
+        try:
+            trello.request("POST", f"/cards/{created['id']}/attachments",
+                           data={"name": "screenshot.png", "mimeType": "image/png"},
+                           files={"file": ("screenshot.png", screenshot, "image/png")})
+        except (RuntimeError, requests.RequestException) as error:
+            # The card exists now. Stopping here would make the next run create it a second time,
+            # so keep it, mark it like any report without a screenshot, and carry on.
+            print(f"  {card['message_id']}: screenshot upload failed ({error})")
+            try:
+                no_screenshot = trello.label_id(config.get("no_screenshot_label", "No screenshot"))
+                trello.request("POST", f"/cards/{created['id']}/idLabels", params={"value": no_screenshot})
+            except (RuntimeError, requests.RequestException) as label_error:
+                print(f"  {card['message_id']}: couldn't add the label either ({label_error})")
     print(f"  Created {created['shortUrl']}  {card['name']}")
 
 
