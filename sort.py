@@ -409,8 +409,10 @@ def sort_board(board, config, limit, apply):
             status = "Would be archived." if not stays else f"{stays} cards would stay, so it would stay open."
         lines += [f"## Emptying '{drain['name']}' ({len(drain_moves)} cards)", "", status, ""]
         for move in drain_moves:
-            added = f", gets {' + '.join(move['labels'])}" if move["labels"] else ""
-            lines.append(f"- [{one_line(move['card']['name'], 80)}]({card_link(move['card'])}) ({card_labels(board, move['card'])}{added})"
+            labels = card_labels(board, move["card"]) or "no labels"
+            if move["labels"]:
+                labels += f", gets {' + '.join(move['labels'])}"
+            lines.append(f"- [{one_line(move['card']['name'], 80)}]({card_link(move['card'])}) ({labels})"
                          f" -> **{move['to_name']}**: {move['reason']}")
         lines.append("")
 
