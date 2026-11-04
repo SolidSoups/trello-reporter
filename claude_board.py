@@ -12,6 +12,7 @@ import datetime
 import hashlib
 import io
 import json
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,6 +41,7 @@ MAX_LABELS = 2
 WORKERS = 4
 NO_THEME = "none"
 AUTO_SORT_PREFIX = "##"  # only lists named "## ..." get cards sorted into them
+DRAIN_PREFIX = "!!"  # lists named "!! ..." get emptied into the ## lists or Incoming, then archived
 
 INSTRUCTIONS = """You label bug reports from players of DarkSwarm, a co-op shooter, with the development disciplines that should handle them.
 
@@ -131,6 +133,20 @@ def screenshot_attachment(card):
     return None
 
 
+def list_marker(name):
+    """What a list's name asks for: "theme" (## ...), "drain" (!! ...), "refused" (both kinds of
+    prefix at once, such as "!!## ..." or "## !! ..."), or None."""
+    leading = re.match(r"[#!\s]*", name).group()
+    if "#" in leading and "!" in leading:
+        return "refused"
+    stripped = name.strip()
+    if stripped.startswith(AUTO_SORT_PREFIX):
+        return "theme"
+    if stripped.startswith(DRAIN_PREFIX):
+        return "drain"
+    return None
+
+
 def card_link(card):
     return f"https://trello.com/c/{card['shortLink']}"
 
@@ -165,7 +181,8 @@ def bot_moved_cards():
     """IDs of cards whose last logged move was made by the bot and not undone."""
     latest = {}
     for entry in read_log(MOVE_LOG_PATH):
-        latest[entry["card"]] = entry["type"]
+        if "card" in entry:  # list archive entries have none
+            latest[entry["card"]] = entry["type"]
     return {card for card, kind in latest.items() if kind == "move"}
 
 
@@ -269,24 +286,35 @@ class Board:
             "attachment_fields": "id,name,mimeType",
         })
 
-    def theme_lists(self):
-        """Every open list Claude may sort into: {theme name: list ID}. Only lists whose name starts with
-        "##" take part, so the team turns automatic sorting on and off by renaming a list. The theme name
-        is the list name without the "##". Incoming, DONE and Unactionable never take part."""
-        excluded = {self.incoming_id, self.sorting["done_list_id"], self.sorting["unactionable_list_id"]}
+    def board_lists(self):
+        """The open lists the bot acts on, from their names. Returns (themes, drains, refused):
+        - themes: {theme name: list ID} for lists named "## ...", which cards get sorted into.
+          The theme name is the list name without the "##".
+        - drains: [{"id", "name"}] for lists named "!! ...", which get emptied and archived.
+        - refused: [(list name, reason)] for names the bot won't act on.
+        Incoming, DONE and Unactionable never take part, whatever their names."""
+        protected = {self.incoming_id, self.sorting["done_list_id"], self.sorting["unactionable_list_id"]}
         lists = self.trello.request("GET", f"/boards/{self.trello.board_id}/lists", params={"fields": "name", "filter": "open"})
-        themes = {}
+        themes, drains, refused = {}, [], []
         for lst in lists:
-            if lst["id"] in excluded or not lst["name"].strip().startswith(AUTO_SORT_PREFIX):
+            marker = list_marker(lst["name"])
+            if marker is None:
                 continue
-            name = lst["name"].strip()[len(AUTO_SORT_PREFIX):].strip()
-            if not name:
-                continue
-            if name in themes:
-                print(f"Skipped: a second list named '{lst['name']}'. Give it another name to use it.")
-                continue
-            themes[name] = lst["id"]
-        return themes
+            if lst["id"] in protected:
+                refused.append((lst["name"], "Incoming, DONE and Unactionable are never sorted into or emptied"))
+            elif marker == "refused":
+                refused.append((lst["name"], f"it has both '{AUTO_SORT_PREFIX}' and '{DRAIN_PREFIX}'. Use one"))
+            elif marker == "drain":
+                drains.append({"id": lst["id"], "name": lst["name"].strip()})
+            else:
+                name = lst["name"].strip()[len(AUTO_SORT_PREFIX):].strip()
+                if not name:
+                    continue
+                if name in themes:
+                    refused.append((lst["name"], "a list with the same theme name exists. Give it another name"))
+                    continue
+                themes[name] = lst["id"]
+        return themes, drains, refused
 
     def team_labelled(self, cards):
         """{card ID: discipline labels} for cards whose labels came from a person: set by the team, or changed
@@ -341,7 +369,7 @@ class Board:
     def prompts_for(self, cards):
         """The labelling prompt, the theme prompt (None without ## lists) and the themes, from one board read."""
         label_prompt = self.label_prompt(self.label_examples(cards, self.team_labelled(cards)))
-        themes = self.theme_lists()
+        themes = self.board_lists()[0]
         theme_prompt = None
         if themes:
             theme_prompt = self.theme_prompt({name: [card for card in cards if card["idList"] == list_id]

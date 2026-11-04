@@ -33,6 +33,8 @@ Undoing the bot's moves (`sort.py --undo-moves`) is deliberately not a double-cl
   1. Create the list **without** `##`, for example `Aiming issues`.
   2. Drag in 2 or 3 typical reports. Claude learns the theme from these.
   3. Rename it to `## Aiming issues`. Within 15 minutes, matching cards from Incoming move in, and new reports go there directly. So add the `##` last: the bot starts filling the list almost straight away.
+- **To empty a list, rename it to `!! <name>`,** for example `!! General UI`. Within 15 minutes, every card in it moves to the `##` list that fits it, or to Incoming if none does. Cards without labels get them first. Once the list is empty, it's archived (not deleted: you can bring it back from the board menu). Undo with `sort.py --undo-moves`, which also reopens the list.
+- **Never combine the prefixes.** A name like `!!## Aiming` or `## !! Aiming` is refused and left alone, and the log says why. Incoming, DONE and Unactionable are never emptied, whatever you call them.
 - **Fixed?** Tick the card complete and leave it in its list.
 - **Archive, never delete.** Archived cards and lists can be brought back; deleted ones can't.
 - **Don't rename** the nine discipline labels, Incoming, DONE or Unactionable. The scripts find them by name or ID.
@@ -162,6 +164,7 @@ The labels are created with their colours the first time `--apply` runs. Every c
 - **Automatic sorting is on for a list when its name starts with `##`.** `## Soft locking` gets cards sorted into it; `UI issues` doesn't. Rename a list to turn it on or off. Claude sees the name without the `##`. Incoming, DONE and Unactionable never take part, whatever their names.
 - **Cards that stay in Incoming:** no theme fits, Uncategorized or Unactionable, or no discipline label yet.
 - **Completed cards are sorted too,** and keep their tick, so each theme list shows its fixed reports next to the open ones.
+- **`!!` lists are emptied in the same run:** each card goes to a fitting `##` list or Incoming, and the list is archived once it has no open cards. A card Claude fails on stays, and the list stays open until the next run gets it. The preview report has a section per `!!` list showing where each card would go.
 - **How Claude knows the themes:** the list names, plus up to 3 cards already in each list as examples. Examples are cards a person put there; cards the bot moved are only used when a list has nothing else, so a wrong move doesn't teach the bot to repeat it. The more the team sorts by hand, the better the bot gets. If a name is ambiguous, write a line about it in `themes.md` in the repo folder (for example "Soft locking: the mission can't continue. Not for doors."). The file is optional.
 - **Cost:** turning a list on or off, renaming it or filling it changes what Claude is told, so every card is asked again on the next run. That's about $0.15 for 450 cards with Haiku. A rerun with no changes is free.
 - **Undo** only moves a card back if it's still in the list the bot put it in, checked again right before each move. Every move and undo is logged in `moves.jsonl`.
