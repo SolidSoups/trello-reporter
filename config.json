@@ -14,5 +14,34 @@
   },
   "label_fields": ["Version", "Mission", "Map"],
   "no_screenshot_label": "No screenshot",
-  "ignore_fields": ["Time", "Sentry"]
+  "ignore_fields": ["Time", "Sentry"],
+  "sorting": {
+    "model": "claude-haiku-5-5",
+    "incoming_list_id": "6ae9c9bdba0d72db5aed2ad2",
+    "lists": {
+      "Tech": "6ae9ce93cef542d3b24b3ccd",
+      "Level Design": "6ae9cea5dad76d1cd428fbe1",
+      "UI": "6ae9ce96e791321dc905838b",
+      "Game Design": "6ae9db8d0e8cace36c8d2a9f",
+      "Art": "6ae9ce98ce73dba581509a75",
+      "Audio": "6ae9dffd4efda3c5f3db74ec",
+      "Animation": "6ae9d90cb9251fcf8648e0ab"
+    },
+    "unactionable_list_id": "6aea068c6de049d9f81fbadd",
+    "done_list_id": "6ae9ce9b12cc839848acd302",
+    "labels": {
+      "Tech": "blue",
+      "UI": "sky",
+      "Level Design": "green",
+      "Art": "pink",
+      "Animation": "lime",
+      "Game Design": "purple",
+      "Audio": "orange",
+      "Uncategorized": "yellow",
+      "Unactionable": "black"
+    },
+    "uncategorized_label": "Uncategorized",
+    "unactionable_label": "Unactionable",
+    "drop_fields": ["Player"]
+  }
 }

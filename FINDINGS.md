@@ -151,6 +151,59 @@ Only webhook messages are processed. Chatter from people in the channel gets no 
 
 A ⚙️ on a skipped message means a person posting fake reports through the leaked webhook URL sees the same reaction as a real reporter. That's accepted.
 
+## Board workflow (decided 2026-11-04)
+
+The board changes from one list per discipline to labels for disciplines and lists for themes.
+
+### Discipline labels
+Every report gets one or two discipline labels, each with its own colour:
+
+| Label | Colour | Meaning |
+|---|---|---|
+| Tech | blue | |
+| UI | sky | |
+| Level Design | green | |
+| Art | pink | |
+| Animation | lime | |
+| Game Design | purple | |
+| Audio | orange | |
+| Uncategorized | yellow | Claude is very unsure. A person picks the discipline. |
+| Unactionable | black | The report says too little to act on. |
+
+- **Two labels are allowed** when a report really involves two disciplines, for example a crash in a menu. That makes a wrong sort less likely: the right team still sees the card.
+- Uncategorized and Unactionable stand alone. A card never has one of them together with a discipline label.
+- The version, mission, map, External and No screenshot labels stay as they are. They have no colour, so the discipline labels stand out.
+- The rules for which label a report gets are in `disciplines.md`.
+
+### Theme lists
+- A list groups reports about the same theme, for example Softlocking, Performance issues, Aiming issues. A list is a theme, not one exact bug.
+- The team creates the theme lists by hand. Claude never creates lists.
+- New reports arrive in **Incoming**, as before.
+- **There's no DONE list.** A fixed report is marked complete (the card's checkbox) and stays in its theme list, so each theme keeps its count of open and fixed reports.
+
+### Moving to the new workflow
+1. **Labels first.** Each card gets its discipline label:
+   - Cards in a discipline list (Incoming Tech, Incoming UI, ...) get the matching label. The team sorted them, so Claude isn't asked.
+   - Cards in Unactionable get the Unactionable label.
+   - Cards in Incoming and DONE are labelled by Claude (Haiku 5.5) using `disciplines.md`.
+   - Cards in DONE are also marked complete.
+   - A card that already has a discipline label is left alone, so the step can be run again safely.
+2. **Moving is done by hand.** The team moves the cards out of the old discipline lists when it's ready. The script doesn't move cards.
+3. **Later:** Claude moves new reports from Incoming into the theme lists. Not built yet.
+
+### Choosing a model
+`sort.py --evaluate` tested Claude against the 213 cards the team had sorted by hand (2026-11-04):
+
+| Model | Agreed with the team | Unsure | Cost for 213 cards |
+|---|---|---|---|
+| Haiku 5.5, first rules | 105 | 85 | $0.06 |
+| Haiku 5.5, revised rules | 156 | 14 | $0.07 |
+| Sonnet 5.5, revised rules | 165 | 5 | $1.45 |
+
+Most disagreements were cards where the rules and the hand sorting differ (lighting to Art, balance to Game Design, crashes to Tech), not mistakes. Haiku made about 8 real mistakes and Sonnet about 5. The team chose **Haiku**: it's 1/20th of the cost, and rule fixes close most of the gap.
+
+What made the difference: the first rules told Claude to be unsure when the screenshot didn't confirm the report. Saying "a clear text is enough" cut unsure answers from 85 to 14.
+
 ## Still open
 
-Nothing. A timed-out screenshot hasn't been seen yet, but the script doesn't depend on it (see Screenshot).
+Nothing for the sync. A timed-out screenshot hasn't been seen yet, but the script doesn't depend on it (see Screenshot).

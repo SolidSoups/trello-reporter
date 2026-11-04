@@ -1,3 +1,5 @@
 requests
 keyring
 tzdata
+anthropic
+Pillow

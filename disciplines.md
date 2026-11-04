@@ -1,24 +1,22 @@
-# Which list a bug report goes in
+# Which discipline label a bug report gets
 
-These are the rules the sorting bot follows. The team owns this file. To change how cards get sorted, edit it and commit. No code changes needed.
+These are the rules the labelling bot follows. The team owns this file. To change how cards get labelled, edit it and commit. No code changes needed.
 
 Draft written 2026-11-04 from the 316 cards the team had already sorted. Rules marked **(proposed)** go against at least one card that's already sorted. Those cases are listed at the bottom.
 
-## How to sort
+## How to label
 
-- **Sort by what the player saw, not by a guessed cause.** "Door opens but I can't walk through" is a door that can't be passed. Don't decide whether a barrel, the level generator or the network caused it. The team finds the cause.
-- **Look at the screenshot.** Many reports are a few words ("wrong material", "stuck here", "look at me") and only make sense with the picture. If the text and the screenshot together still don't say what's wrong, you're not sure.
-- **One list per card.** If a report has several problems, sort by the one that blocks the player most. Mention the others in the reason.
-- **Reports in other languages are normal.** Sort them the same way.
-- **Suggestions and feedback count.** Sort them to the team that would make the change.
-- **Be unsure when:**
-  - the report fits two lists equally well
-  - neither the text nor the screenshot says what's wrong ("It is very buggy", "Bugging", a blank report)
-  - it isn't about the game at all
+- **Label by what the player saw, not by a guessed cause.** "Door opens but I can't walk through" is a door that can't be passed. Don't decide whether a barrel, the level generator or the network caused it. The team finds the cause.
+- **A clear text is enough.** If the text says what's wrong, trust it. Screenshots are often taken a moment too late or from the wrong angle, so a screenshot that doesn't show the problem is never a reason to be unsure.
+- **Use the screenshot for short or vague reports.** Many reports are a few words ("wrong material", "stuck here", "look at me") and only make sense with the picture.
+- **One or two labels.** Give one label when one team owns the problem. Give two when the report really involves two teams, for example a crash in a menu (Tech and UI), or a door that can't be passed while carrying a barrel (Level Design and Tech). Don't add a second label just in case.
+- **Several problems in one report:** label the one that blocks the player most, plus a second one if another problem in the report clearly belongs to another team. Mention the rest in the reason.
+- **Reports in other languages are normal.** Label them the same way.
+- **Suggestions and feedback count.** Label them for the team that would make the change.
+- **Be unsure only when** neither the text nor the screenshot says what the problem is, so a person would also have to guess ("It is very buggy", "Bugging", "very noisy here" with nothing to show whether it's sound or the picture). Knowing what the problem is but weighing two labels is not a reason to be unsure: give both. An unsure card gets **Uncategorized**.
+- **Unactionable** is for reports that say too little for anyone to act on, even after a person looks at them: a blank report with a screenshot that shows nothing wrong, "r u serious", a report that isn't about the game. If a person could still work out the problem from the screenshot, it's Uncategorized, not Unactionable.
 
-  An unsure card stays in Incoming for a person. That's always better than a wrong move.
-
-## The lists
+## The discipline labels
 
 ### Tech
 
@@ -26,6 +24,8 @@ Code and systems: things that behave wrong, as opposed to things built or drawn 
 
 - Weapons, reloading, ammo, grenades, melee, weapon switching
 - Class abilities and gadgets: turret, cloak, dash, coil, revive
+- Objects players place or carry (turrets, coils, barrels, the reactor core), even when the problem is how they look, such as a turret floating **(proposed)**
+- Interacting, picking up, shooting or hitting through walls and closed doors **(proposed)**
 - Player state: downed, revived, dead, stuck in a state, can't move or shoot after an action
 - Enemy behaviour (AI): not attacking, can't find a path to the player, walking in circles, despawning, seeing a cloaked player
 - Enemies stuck in or walking through walls, including enemies seen inside walls **(proposed)**
@@ -37,7 +37,9 @@ Code and systems: things that behave wrong, as opposed to things built or drawn 
 - Saving and progression: lost level, credits or unlocks, the wrong class after picking one
 - Input and controls: keybinds that don't work, keyboard layouts (AZERTY), controller vibration
 - Mission logic: objectives that don't complete, extraction that doesn't end the mission, no "Mission accomplished"
-- Animation glitches (pose, aim direction, a gun held wrong, a character lying down) while the Animation list is unused **(proposed)**
+- Wrong numbers and values: kills showing 0, wrong rewards or XP, even when they're seen in a menu **(proposed)**
+- Enemies spawning without end, or spawning on top of players **(proposed)**
+- Players put in the wrong place by a class ability, an object or another player: under the floor after a skill, floating, out of bounds with the coil **(proposed)**
 
 ### Level Design
 
@@ -47,16 +49,17 @@ The places the players move through: how they're built, blocked, lit and filled.
 - Invisible walls, solid walls inside doorways, blocks in a doorway
 - Holes, gaps, missing walls or railings, places to fall off or under the map
 - Players stuck in the level geometry: in a crack, on a ledge, under a building
-- Out of bounds: reaching places players shouldn't, seeing outside the level, a hidden spot to stand in
+- Out of bounds: reaching places players shouldn't by walking, jumping or falling, seeing outside the level. If an ability or object got them there, it's Tech.
 - Missing collision: walking through rocks or terrain
 - Blocked progress caused by the layout: no way to reach the extract or the reactor
 - Pacing: an area that feels empty, quiet or too full, few enemies on the way to extraction
 - Enemy spawn points in the wrong place: spawning outside the playable area
 - Leftover debug objects in a level: debug lights, placeholder objects
+- Hazards built into the level (fans, lasers, pits, traps) that hurt or kill players unfairly, for example from too far away **(proposed)**
 
 ### UI
 
-Menus, the HUD and anything on screen that isn't the game world.
+Menus, the HUD and anything on screen that isn't the game world. UI is about how things are shown, not whether the values shown are right: a kill count showing 0 is Tech.
 
 - Minimap and map: grey, missing markers, stuck at the wrong size
 - Menus: navigation, Esc and Back, the bug report window, the server browser, menus clickable too early
@@ -74,6 +77,7 @@ How the game plays and whether it's clear, as opposed to whether it works.
 - Unclear mechanics: "what does this ability do?", "capturing isn't clear"
 - Rewards that feel wrong: a skin that's barely different
 - Requests for new mechanics: melee while reloading, a flashlight toggle
+- Requests to change how something works, even when it's about doors or reviving: a grace period after a revive, a door trick that traps the swarm **(proposed)**
 
 ### Art
 
@@ -81,7 +85,7 @@ How things look.
 
 - Wrong or missing materials and textures
 - Z-fighting (two surfaces flickering through each other) **(proposed)**
-- Floating or sunk-in objects
+- Floating or sunk-in scenery and props (not objects players place, which go to Tech)
 - Lighting, fog, sky and backgrounds that look wrong
 - Effects: missing or wrong particles and glows
 - Weapon and character models or skins that look wrong
@@ -98,12 +102,11 @@ Anything heard.
 
 ### Animation
 
-Movement of characters, enemies and weapons that looks wrong: poses, spawn animations, aiming, how weapons are held. **(proposed)** The list is empty today, and the team decides whether to use it. Until then these reports go to Tech.
+Movement of characters, enemies and weapons that looks wrong: poses (a character stuck in an A pose, lying down after printing), spawn animations, aim direction, how weapons are held, guns crossing. If the movement also breaks gameplay (can't shoot, can't turn), add Tech.
 
-### Never chosen by the bot
+### Uncategorized and Unactionable
 
-- **Unactionable:** a person decides this. If you think a report can't be acted on, be unsure.
-- **DONE.**
+See "How to label" above. These two labels always stand alone, never with a discipline label.
 
 <!-- sort.py stops reading here. Everything below is for the team. -->
 

@@ -79,3 +79,41 @@ Not needed on the build computer. For testing, in PowerShell, in the repo folder
 | `.\.venv\Scripts\python.exe sync.py --set-secrets` | Change a stored secret |
 
 `FINDINGS.md` explains how reports are parsed and why.
+
+## Backups of the board
+
+`backup.py` saves a snapshot of the whole board: every card (archived ones too) with its list, position, labels, completion, name and description, plus every list, label, checklist and comment. Each snapshot is one file named after the time it was taken, in `%LOCALAPPDATA%\darkswarm-bug-sync\snapshots\`, for example `2026-11-04_11-45-30.json.gz`.
+
+| Command | Does |
+|---|---|
+| `.\.venv\Scripts\python.exe backup.py` | Snapshot plus any screenshots not saved yet |
+| `.\.venv\Scripts\python.exe backup.py --note before-moving-cards` | The same, with a note in the file name |
+| `.\.venv\Scripts\python.exe backup.py --no-attachments` | Board only, takes a few seconds |
+
+- Screenshots go into `snapshots\attachments\`, once each. The first run downloads all of them (a few GB, which takes a while); later runs only fetch new ones.
+- `sort.py --label --apply` takes a snapshot by itself before it writes anything (`..._before-label-apply.json.gz`).
+- To keep snapshots somewhere else, such as a OneDrive folder, set `"snapshots_dir"` in `config.json`. Never put them in the git repo: they contain player names.
+- There's no restore script yet. A snapshot already lets you see where every card was and which labels it had.
+
+## Discipline labels with Claude
+
+`sort.py` gives each report one or two discipline labels (Tech, UI, Level Design, Art, Animation, Game Design, Audio), or Uncategorized or Unactionable, following the rules in `disciplines.md`. It never moves a card. `FINDINGS.md` ("Board workflow") explains the setup.
+
+| Command | Does |
+|---|---|
+| `.\.venv\Scripts\python.exe sort.py --label --limit 20` | Preview: the labels the first 20 unlabelled cards would get. Writes nothing to the board |
+| `.\.venv\Scripts\python.exe sort.py --label` | Preview for every card |
+| `.\.venv\Scripts\python.exe sort.py --label --apply` | Writes the labels, and marks cards in DONE complete |
+| `.\.venv\Scripts\python.exe sort.py --evaluate --model haiku` | Tests Claude against the cards the team sorted into discipline lists |
+
+Where labels come from with `--label`:
+- a card in a discipline list (Incoming Tech, ...) gets that list's label, without asking Claude
+- a card in Unactionable gets the Unactionable label
+- every other card (Incoming, DONE, theme lists) is labelled by Claude
+- a card that already has a discipline label is left alone, so running it again is safe
+
+The labels are created with their colours the first time `--apply` runs. Every change is logged in `label_changes.jsonl`. To undo everything, delete the discipline labels on the board in Trello (board menu, Labels): that removes them from every card.
+
+`--model` is `haiku`, `sonnet` or `opus`. Without it, the model in `config.json` under `sorting` is used (Haiku). `--limit` with `--evaluate` picks the same cards every run, so models can be compared on the same set.
+
+Each run prints a summary and writes a report to `%LOCALAPPDATA%\darkswarm-bug-sync\`, with the cost of the run at the top. Answers are saved in `sort_answers.json` there, so asking the same model about the same card again costs nothing until `disciplines.md` changes. A preview followed by `--apply` only pays once. Shrunk screenshots are kept in `screenshots\`.

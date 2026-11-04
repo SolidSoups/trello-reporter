@@ -1,6 +1,8 @@
 # Plan: Claude sorts new reports into the discipline lists
 
-Status: planned, nothing built. Written 2026-11-04.
+> **Superseded on 2026-11-04.** The board now uses discipline *labels* and *theme lists* instead of one list per discipline, with no DONE list. See "Board workflow" in `FINDINGS.md`. Built so far: `sort.py --evaluate` and `sort.py --label` (labels only, never moves cards). Moving new reports into theme lists is still to be planned. This document is kept for the test results and the reasoning behind the safety rules, which still apply.
+
+Status: written 2026-11-04, before the switch to labels.
 
 ## Goal
 
