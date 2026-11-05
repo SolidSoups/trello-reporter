@@ -35,6 +35,7 @@ Undoing the bot's moves (`sort.py --undo-moves`) is deliberately not a double-cl
   3. Rename it to `## Aiming issues`. Within 15 minutes, matching cards from Incoming move in, and new reports go there directly. So add the `##` last: the bot starts filling the list almost straight away.
 - **To empty a list, rename it to `!! <name>`,** for example `!! General UI`. Within 15 minutes, every card in it moves to the `##` list that fits it, or to Incoming if none does. Cards without labels get them first. Once the list is empty, it's archived (not deleted: you can bring it back from the board menu). Undo with `sort.py --undo-moves`, which also reopens the list.
 - **Never combine the prefixes.** A name like `!!## Aiming` or `## !! Aiming` is refused and left alone, and the log says why. Incoming, DONE and Unactionable are never emptied, whatever you call them.
+- **Reports in other languages** arrive with an English title. The player's own words stay at the top of the description, with `` [Translated] `...` `` under them. Write a translation by hand the same way and the bot leaves the card alone.
 - **Fixed?** Tick the card complete and leave it in its list.
 - **Archive, never delete.** Archived cards and lists can be brought back; deleted ones can't.
 - **Don't rename** the nine discipline labels, Incoming, DONE or Unactionable. The scripts find them by name or ID.
@@ -148,6 +149,20 @@ Where labels come from with `--label`:
 **Which labels count as the team's:** labels the team set, and labels someone changed after Claude set them. `label_changes.jsonl` records what Claude set, so the scripts can tell the two apart. `--evaluate` tests against these, and `--label` takes its example cards from them. So when someone fixes a wrong label in Trello, Claude learns from it. On a PC without that log, every label counts as the team's.
 
 The labels are created with their colours the first time `--apply` runs. Every change is logged in `label_changes.jsonl`. To undo everything, delete the discipline labels on the board in Trello (board menu, Labels): that removes them from every card.
+
+## Translating cards already on the board
+
+New reports are translated by the sync. For cards that were on the board before that:
+
+| Command | Does |
+|---|---|
+| `.\.venv\Scripts\python.exe sort.py --translate` | Preview: which open cards are in another language, with their English title and translation. Changes nothing |
+| `.\.venv\Scripts\python.exe sort.py --translate --apply` | Writes them. Takes a snapshot first |
+| `.\.venv\Scripts\python.exe sort.py --undo-translations --since "2026-11-04 17:00"` | Puts the old title and description back. Typed, never double-clicked, and asks for `yes` |
+
+- Cards in DONE and cards that already have a translation (`[Translated]` or `[Translate]`, from the bot or by hand) are left alone.
+- Only reports mostly in another language are translated. A stray foreign word or a one-word report isn't.
+- Each change is logged in `translations.jsonl` with the old text. Undo only changes cards nobody has edited since. Run `--apply` and the undo on the build computer, where the log lives.
 
 ## Sorting Incoming into theme lists
 

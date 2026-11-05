@@ -212,6 +212,12 @@ Most disagreements were cards where the rules and the hand sorting differ (light
 
 What made the difference: the first rules told Claude to be unsure when the screenshot didn't confirm the report. Saying "a clear text is enough" cut unsure answers from 85 to 14.
 
+### Translations (decided 2026-11-04)
+- A report mostly in another language gets an **English title**. Its description keeps the player's own words at the top, then `` [Translated] `<English>` `` on one line, then the game fields. That matches the translations the team already added by hand.
+- **New reports:** the sync's labelling call also returns the language and the translation, so it costs no extra call. The card is created translated, and its `##` list is chosen from the English text.
+- **Cards already on the board:** `sort.py --translate [--apply]`, a short text-only prompt without screenshots. DONE is left out. Cards with `[Translated]` or `[Translate]` in the player's text are skipped.
+- **This is the only place the bot edits card text.** It adds, and never removes, the player's words. Each edit logs the old title and description in `translations.jsonl`; a snapshot is taken before `--apply`; `--undo-translations` restores cards nobody has edited since. Cards created translated have nothing to undo, since the original is in the description and in Discord.
+
 ## Still open
 
 Nothing for the sync. A timed-out screenshot hasn't been seen yet, but the script doesn't depend on it (see Screenshot).

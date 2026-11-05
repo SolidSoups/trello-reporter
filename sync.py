@@ -41,7 +41,7 @@ import requests
 # Reports must keep arriving even on a PC where setup.cmd hasn't installed the Claude packages yet.
 try:
     import anthropic
-    from claude_board import Board, card_link, ensure_labels, log_labels, log_move, make_board
+    from claude_board import Board, apply_translation, card_link, ensure_labels, log_labels, log_move, make_board
     CLAUDE_MISSING = None
 except ImportError as error:
     CLAUDE_MISSING = error
@@ -202,11 +202,13 @@ def create_card(trello, card, screenshot, decision, organizer, config):
     label_ids += [organizer.label_id(name) for name in labels]
     theme = decision["theme"] if decision else None
     list_id = organizer.themes[theme] if theme else trello.list_id
+    # A report in another language gets an English title, and the translation under the player's own words.
+    name, desc = decision["translation"] if decision and decision["translation"] else (card["name"], card["desc"])
 
     created = trello.request("POST", "/cards", data={
         "idList": list_id,
-        "name": card["name"],
-        "desc": card["desc"],
+        "name": name,
+        "desc": desc,
         "idLabels": ",".join(label_ids),
         "pos": "bottom",
     })
@@ -226,14 +228,15 @@ def create_card(trello, card, screenshot, decision, organizer, config):
                 print(f"  {card['message_id']}: couldn't add the label either ({label_error})")
 
     if labels:
-        log_labels({"card": created["id"], "link": created["shortUrl"], "name": card["name"], "added_labels": labels,
+        log_labels({"card": created["id"], "link": created["shortUrl"], "name": name, "added_labels": labels,
                     "marked_complete": False, "source": "Claude", "reason": decision["label_reason"]})
     if theme:
-        log_move({"type": "move", "card": created["id"], "link": created["shortUrl"], "name": card["name"],
+        log_move({"type": "move", "card": created["id"], "link": created["shortUrl"], "name": name,
                   "from": trello.list_id, "to": list_id, "to_name": theme, "model": organizer.board.model,
                   "reason": decision["theme_reason"], "by": "sync"})
     where = f" -> {theme}" if theme else ""
-    print(f"  Created {created['shortUrl']}  [{', '.join(labels) or 'no discipline label'}]{where}  {card['name']}")
+    translated = " (translated)" if name != card["name"] else ""
+    print(f"  Created {created['shortUrl']}  [{', '.join(labels) or 'no discipline label'}]{where}  {name}{translated}")
 
 
 def embed_fields(embed):
@@ -321,8 +324,9 @@ def print_card(card, screenshot, decision, config, existing_labels):
         label_names.append(no_screenshot_label(config))
     labels = [name if name in existing_labels else f"{name} (new)" for name in label_names]
 
+    name, desc = decision["translation"] if decision and decision.get("translation") else (card["name"], card["desc"])
     print(f"\n--- CARD from {card['message_id']}")
-    print(f"  name:   {card['name']}")
+    print(f"  name:   {name}" + ("  (translated)" if name != card["name"] else ""))
     print(f"  labels: {', '.join(labels)}")
     if decision:
         if decision["error"] and not decision["labels"]:
@@ -338,7 +342,7 @@ def print_card(card, screenshot, decision, config, existing_labels):
     else:
         print("  screenshot: none")
     print("  description:")
-    for line in card["desc"].splitlines():
+    for line in desc.splitlines():
         print(f"    {line}")
 
 
@@ -437,6 +441,8 @@ def organize_stragglers(trello, organizer):
             trello.request("POST", f"/cards/{card['id']}/idLabels", params={"value": organizer.label_id(name)})
         log_labels({"card": card["id"], "link": card_link(card), "name": card["name"], "added_labels": decision["labels"],
                     "marked_complete": False, "source": "Claude", "reason": decision["label_reason"]})
+        if decision["translation"]:
+            apply_translation(trello, card, *decision["translation"], by="sync")
         theme = decision["theme"]
         if theme:
             current = trello.request("GET", f"/cards/{card['id']}", params={"fields": "idList,closed"})

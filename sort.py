@@ -30,7 +30,13 @@ labels Claude set). It only reads.
 still where it put them, reopening a !! list the sort archived. It shows how
 many cards it would move and only goes ahead when you type "yes".
 
-Without --apply, --sort and --label only write a preview report.
+--translate gives every open card in another language (DONE left out) an
+English title and a "[Translated] `...`" line under the player's own words. Cards
+that already have a translation, from the bot or by hand, are left alone. New
+reports are translated by the sync as they arrive. --undo-translations puts the
+old text back on cards nobody edited since, after you type "yes".
+
+Without --apply, --sort, --label and --translate only write a preview report.
 
     python sort.py --sort --limit 20             (preview)
     python sort.py --sort --apply                (moves cards)
@@ -38,6 +44,9 @@ Without --apply, --sort and --label only write a preview report.
     python sort.py --label --apply
     python sort.py --evaluate --model haiku --limit 30
     python sort.py --undo-moves --since "2026-11-04 14:30"
+    python sort.py --translate                   (preview)
+    python sort.py --translate --apply
+    python sort.py --undo-translations --since "2026-11-04 14:30"
 
 The rules Claude follows are in disciplines.md, up to the "sort.py stops
 reading here" marker. Answers are cached per card, model, rules, themes and
@@ -55,8 +64,9 @@ import anthropic
 
 from backup import take_snapshot
 from claude_board import (
-    LABEL_LOG_PATH, MODELS, MOVE_LOG_PATH, NO_THEME, AUTO_SORT_PREFIX, card_link, ensure_labels,
-    log_labels, log_move, make_board, one_line, read_log,
+    LABEL_LOG_PATH, MODELS, MOVE_LOG_PATH, NO_THEME, AUTO_SORT_PREFIX, TRANSLATION_LOG_PATH, apply_translation,
+    card_link, ensure_labels, has_translation, log_labels, log_move, log_translation, make_board, one_line,
+    read_log, report_text, translated_desc, translation_of,
 )
 from common import (
     DANISH_TIME, DATA_DIR, KEYRING_ANTHROPIC_KEY, KEYRING_TRELLO_KEY, KEYRING_TRELLO_TOKEN,
@@ -440,6 +450,115 @@ def sort_board(board, config, limit, apply):
         print(f"Moved {moved} cards, {len(not_moved)} not moved." + (f" Logged in {MOVE_LOG_PATH}." if moved else ""))
 
 
+def translate_board(board, config, limit, apply):
+    """Give every open card in another language an English title and a translation under the player's words.
+    Cards in DONE and cards that already have a translation, from the bot or by hand, are left alone."""
+    done_list = board.sorting["done_list_id"]
+    cards = sorted(board.board_cards(), key=lambda c: c["id"])
+    candidates = [card for card in cards if card["idList"] != done_list and not has_translation(card["desc"])]
+    print(f"{len(cards)} open cards, {len(candidates)} without a translation (DONE left out).")
+    if limit:
+        candidates = candidates[:limit]
+
+    prompt = board.translate_prompt()
+    results = board.ask_all([board.text_item(card) for card in candidates], prompt)
+    cached = max(0, len(candidates) - board.usage["calls"])
+
+    plan, errors = [], []  # plan: (card, English title, new description, English text)
+    for card in candidates:
+        answer = results[card["id"]]
+        if isinstance(answer, str):
+            errors.append((card, answer))
+            continue
+        english = translation_of(answer, report_text(card["desc"]))
+        if english:
+            plan.append((card, english[0], translated_desc(card["desc"], english[1]), english[1]))
+    print(f"{len(plan)} cards are in another language.")
+
+    done, not_done = 0, []
+    if apply and plan:
+        take_snapshot(board.trello, config, "before-translate", attachments=False)
+        for card, title, desc, _ in plan:
+            # Someone may have edited the card meanwhile; their text wins.
+            current = board.trello.request("GET", f"/cards/{card['id']}", params={"fields": "name,desc"})
+            if current["name"] != card["name"] or current["desc"] != card["desc"]:
+                not_done.append((card, "edited by someone in the meantime"))
+                continue
+            try:
+                apply_translation(board.trello, card, title, desc, by="sort")
+            except RuntimeError as error:
+                not_done.append((card, str(error)))
+                continue
+            done += 1
+
+    title_line = "Cards translated" if apply else "Proposed translations (preview, nothing was changed)"
+    lines = report_header(title_line, board, prompt, len(candidates), cached)
+    lines += [f"## In another language ({len(plan)})", ""]
+    for card, title, _, english in plan:
+        lines += [f"- [{one_line(card['name'], 80)}]({card_link(card)})  ",
+                  f"  New title: **{title}**  ",
+                  f"  Translation: {one_line(english, 300)}"]
+    if errors:
+        lines += ["", "## Errors", ""] + [f"- [{one_line(card['name'], 80)}]({card_link(card)}): {error}" for card, error in errors]
+    if not_done:
+        lines += ["", "## Not changed", ""] + [f"- [{one_line(card['name'], 80)}]({card_link(card)}): {why}" for card, why in not_done]
+    path = write_report("translate" if apply else "translate-preview", lines)
+    print(f"Claude cost ${board.cost():.2f}. Report: {path}")
+    if apply:
+        print(f"Translated {done} cards, {len(not_done)} not changed. Every change is logged in {TRANSLATION_LOG_PATH}.")
+
+
+def undo_translations(trello, config, since):
+    """Put back the title and description cards had before the bot translated them, if nobody edited them since."""
+    latest = {}
+    for entry in read_log(TRANSLATION_LOG_PATH):
+        if datetime.datetime.fromisoformat(entry["time"]) < since:
+            continue
+        if entry["type"] == "translate":
+            latest[entry["card"]] = entry
+        elif entry["type"] == "undo":
+            latest.pop(entry["card"], None)
+    if not latest:
+        sys.exit("No translations to undo in that period.")
+
+    print(f"Checking {len(latest)} cards the bot translated...")
+    to_undo, left = [], 0
+    for entry in latest.values():
+        current = trello.request("GET", f"/cards/{entry['card']}", params={"fields": "name,desc,closed"})
+        if current["name"] == entry["new_name"] and current["desc"] == entry["new_desc"] and not current["closed"]:
+            to_undo.append(entry)
+        else:
+            left += 1
+    if not to_undo:
+        sys.exit(f"Nothing to undo: all {left} cards have been edited since.")
+
+    print(f"\nThis puts back the original title and description of {len(to_undo)} cards.")
+    if left:
+        print(f"{left} more were edited by someone since, and are left alone.")
+    if not sys.stdin.isatty():
+        sys.exit("Undo has to be confirmed, so run it in a terminal.")
+    try:
+        answer = input(f"\nType yes to change {len(to_undo)} cards back: ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() != "yes":
+        sys.exit("Nothing was changed.")
+
+    take_snapshot(trello, config, "before-undo-translations", attachments=False)
+    undone, edited_meanwhile = 0, 0
+    for entry in to_undo:
+        current = trello.request("GET", f"/cards/{entry['card']}", params={"fields": "name,desc"})
+        if current["name"] != entry["new_name"] or current["desc"] != entry["new_desc"]:
+            edited_meanwhile += 1
+            continue
+        trello.request("PUT", f"/cards/{entry['card']}", data={"name": entry["old_name"], "desc": entry["old_desc"]})
+        undone += 1
+        log_translation({"type": "undo", "card": entry["card"], "link": entry["link"]})
+    print(f"Changed {undone} cards back. Every undo is logged in {TRANSLATION_LOG_PATH}.")
+    if edited_meanwhile:
+        print(f"{edited_meanwhile} were edited by someone while you were confirming, and were left alone.")
+
+
 def undo_moves(trello, config, since):
     """Move cards the bot moved back to where they came from, if they're still in the list it put them in."""
     latest = {}
@@ -518,9 +637,11 @@ def main():
     mode.add_argument("--label", action="store_true", help="give every open card its discipline labels")
     mode.add_argument("--sort", action="store_true", help="move labelled cards in Incoming into matching theme lists")
     mode.add_argument("--undo-moves", action="store_true", help="move cards the bot moved back to where they came from")
-    parser.add_argument("--apply", action="store_true", help="with --label or --sort: write the changes to the board")
+    mode.add_argument("--translate", action="store_true", help="translate open cards in another language into English")
+    mode.add_argument("--undo-translations", action="store_true", help="put back the text of cards the bot translated")
+    parser.add_argument("--apply", action="store_true", help="with --label, --sort or --translate: write the changes to the board")
     parser.add_argument("--since", metavar='"YYYY-MM-DD HH:MM"',
-                        help="with --undo-moves: only undo moves made since then (Danish time)")
+                        help="with --undo-moves or --undo-translations: only undo changes made since then (Danish time)")
     parser.add_argument("--model", choices=MODELS, help="model to use (default: sorting.model in config.json)")
     parser.add_argument("--limit", type=int, metavar="N", help="only handle N cards")
     parser.add_argument("--log", action="store_true", help="write all output to sort.log, for scheduled runs")
@@ -532,8 +653,8 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if args.limit is not None and args.limit < 1:
         sys.exit("--limit needs a number of 1 or more.")
-    if args.apply and not (args.label or args.sort):
-        sys.exit("--apply only goes with --label or --sort.")
+    if args.apply and not (args.label or args.sort or args.translate):
+        sys.exit("--apply only goes with --label, --sort or --translate.")
     since = datetime.datetime.min.replace(tzinfo=DANISH_TIME)
     if args.since:
         try:
@@ -541,7 +662,8 @@ def main():
         except ValueError:
             sys.exit('--since needs a time like "2026-11-04 14:30".')
 
-    needed = [KEYRING_TRELLO_KEY, KEYRING_TRELLO_TOKEN] + ([] if args.undo_moves else [KEYRING_ANTHROPIC_KEY])
+    undoing = args.undo_moves or args.undo_translations
+    needed = [KEYRING_TRELLO_KEY, KEYRING_TRELLO_TOKEN] + ([] if undoing else [KEYRING_ANTHROPIC_KEY])
     secrets = {name: get_secret(name) for name in needed}
     if not all(secrets.values()):
         sys.exit("Missing secrets. Run: python sync.py --set-secrets")
@@ -549,12 +671,15 @@ def main():
     trello = Trello(secrets[KEYRING_TRELLO_KEY], secrets[KEYRING_TRELLO_TOKEN], config)
 
     # Runs that write share the sync's lock, so they never touch the board at the same time as a sync.
-    writes = args.apply or args.undo_moves
+    writes = args.apply or undoing
     if writes and not acquire_lock("sort.py"):
         return
     try:
         if args.undo_moves:
             undo_moves(trello, config, since)
+            return
+        if args.undo_translations:
+            undo_translations(trello, config, since)
             return
         board = make_board(config, trello, secrets[KEYRING_ANTHROPIC_KEY], MODELS.get(args.model))
         print(f"Model: {board.model}")
@@ -563,6 +688,8 @@ def main():
                 evaluate(board, args.limit)
             elif args.sort:
                 sort_board(board, config, args.limit, args.apply)
+            elif args.translate:
+                translate_board(board, config, args.limit, args.apply)
             else:
                 label_board(board, config, args.limit, args.apply)
         finally:
